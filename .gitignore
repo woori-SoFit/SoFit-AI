@@ -1,0 +1,10 @@
+# AI 관련 제외
+models/*.pkl
+models/*.txt
+data/*.csv
+data/*.zip
+
+# Python 관련 제외
+__pycache__/
+venv/
+.ipynb_checkpoints/
