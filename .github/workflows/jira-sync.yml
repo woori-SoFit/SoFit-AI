@@ -35,14 +35,12 @@ jobs:
               LABEL="AI,priority:low"
             fi
 
+            BODY="## Jira 티켓\n${JIRA_BASE_URL}/browse/${JIRA_KEY}\n\n## 내용\n${JIRA_BODY}"
+
             gh issue create \
               --repo ${{ github.repository }} \
               --title "[$JIRA_KEY] $JIRA_TITLE" \
-              --body "## Jira 티켓
-$JIRA_BASE_URL/browse/$JIRA_KEY
-
-## 내용
-$JIRA_BODY" \
+              --body "$BODY" \
               --label "$LABEL"
 
             echo "✅ GitHub Issue 생성 완료: [$JIRA_KEY] $JIRA_TITLE"
