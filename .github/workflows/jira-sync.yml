@@ -1,0 +1,75 @@
+name: Sync Jira to GitHub Issues (AI)
+
+on:
+  repository_dispatch:
+    types: [jira-to-github-sync]
+
+jobs:
+  create_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check and Create GitHub Issue
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          JIRA_KEY: ${{ github.event.client_payload.issue_key }}
+          JIRA_TITLE: ${{ github.event.client_payload.summary }}
+          JIRA_BODY: ${{ github.event.client_payload.description }}
+          JIRA_PRIORITY: ${{ github.event.client_payload.priority }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+        run: |
+          # 중복 체크
+          EXISTING=$(gh issue list \
+            --repo ${{ github.repository }} \
+            --search "[$JIRA_KEY]" \
+            --json number \
+            --jq length)
+
+          if [ "$EXISTING" -eq "0" ]; then
+            # Jira 우선순위 → GitHub Label 매핑
+            LABEL="AI"
+            if [ "$JIRA_PRIORITY" = "High" ]; then
+              LABEL="AI,priority:high"
+            elif [ "$JIRA_PRIORITY" = "Medium" ]; then
+              LABEL="AI,priority:medium"
+            elif [ "$JIRA_PRIORITY" = "Low" ]; then
+              LABEL="AI,priority:low"
+            fi
+
+            gh issue create \
+              --repo ${{ github.repository }} \
+              --title "[$JIRA_KEY] $JIRA_TITLE" \
+              --body "## Jira 티켓
+$JIRA_BASE_URL/browse/$JIRA_KEY
+
+## 내용
+$JIRA_BODY" \
+              --label "$LABEL"
+
+            echo "✅ GitHub Issue 생성 완료: [$JIRA_KEY] $JIRA_TITLE"
+          else
+            echo "⏭️ 이미 존재하는 이슈: [$JIRA_KEY] 스킵"
+          fi
+
+  close_issue_on_done:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.client_payload.status == 'Done' }}
+    steps:
+      - name: Close GitHub Issue when Jira Done
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          JIRA_KEY: ${{ github.event.client_payload.issue_key }}
+        run: |
+          ISSUE_NUMBER=$(gh issue list \
+            --repo ${{ github.repository }} \
+            --search "[$JIRA_KEY]" \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue close $ISSUE_NUMBER \
+              --repo ${{ github.repository }} \
+              --comment "Jira 티켓 $JIRA_KEY 완료 처리됨"
+            echo "✅ GitHub Issue #$ISSUE_NUMBER 닫기 완료"
+          else
+            echo "⚠️ 해당 이슈를 찾을 수 없음: [$JIRA_KEY]"
+          fi
