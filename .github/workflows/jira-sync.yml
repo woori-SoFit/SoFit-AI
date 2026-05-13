@@ -14,7 +14,6 @@ jobs:
           JIRA_KEY: ${{ github.event.client_payload.issue_key }}
           JIRA_TITLE: ${{ github.event.client_payload.summary }}
           JIRA_BODY: ${{ github.event.client_payload.description }}
-          JIRA_PRIORITY: ${{ github.event.client_payload.priority }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
           # 중복 체크
@@ -25,23 +24,12 @@ jobs:
             --jq length)
 
           if [ "$EXISTING" -eq "0" ]; then
-            # Jira 우선순위 → GitHub Label 매핑
-            LABEL="AI"
-            if [ "$JIRA_PRIORITY" = "High" ]; then
-              LABEL="AI,priority:high"
-            elif [ "$JIRA_PRIORITY" = "Medium" ]; then
-              LABEL="AI,priority:medium"
-            elif [ "$JIRA_PRIORITY" = "Low" ]; then
-              LABEL="AI,priority:low"
-            fi
-
             BODY="## Jira 티켓\n${JIRA_BASE_URL}/browse/${JIRA_KEY}\n\n## 내용\n${JIRA_BODY}"
 
             gh issue create \
               --repo ${{ github.repository }} \
               --title "[$JIRA_KEY] $JIRA_TITLE" \
-              --body "$BODY" \
-              --label "$LABEL"
+              --body "$BODY"
 
             echo "✅ GitHub Issue 생성 완료: [$JIRA_KEY] $JIRA_TITLE"
           else
