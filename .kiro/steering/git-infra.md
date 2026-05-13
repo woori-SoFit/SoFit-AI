@@ -1,25 +1,39 @@
-# git-infra
-
 # SoFit Git & 인프라 컨벤션
 
 ## 커밋 컨벤션
 
+### 형식
+
 ```
-[Feat] 새로운 기능 추가
-[Fix] 버그 수정
-[Refactor] 코드 리팩토링 (기능 변화 없음)
-[Style] 포맷팅, 세미콜론 누락, 들여쓰기 등
-[Docs] README, 주석 등 문서 수정
-[Test] 테스트 코드 추가/수정
-[Chore] 빌드 설정, 패키지 매니저 등 자잘한 작업
+[SOFIT-이슈번호] 태그: 작업 내용
 ```
 
-예시: `[Feat] 대출 신청 API 구현 - SOFIT-123`
+예시
+
+```
+[SOFIT-30] Chore: Docker Compose 설정 수정
+[SOFIT-52] Feat: 대출 신청 API 구현
+[SOFIT-81] Fix: 로그인 토큰 재발급 오류 수정
+```
+
+---
+
+## 태그 종류
+
+| 태그 | 설명 |
+| --- | --- |
+| Feat | 새로운 기능 추가 |
+| Fix | 버그 수정 |
+| Refactor | 코드 리팩토링 (기능 변화 없음) |
+| Style | 포맷팅, 세미콜론 누락, 들여쓰기 등 스타일 수정 |
+| Docs | README, 주석 등 문서 수정 |
+| Test | 테스트 코드 추가 및 수정 |
+| Chore | 빌드 설정, 패키지 매니저 설정 등 기타 작업 |
 
 ## 브랜치 전략
 
 - Jira 이슈 번호로 브랜치 생성
-- 브랜치명: `feature/SOFIT-123-loan-application`
+- 브랜치명: `feat/SOFIT-123-loan-application`
 - 레포별로 Jenkins 파이프라인이 따로 구성되어 있으므로 별도 접두사 불필요
 
 ## PR 규칙
