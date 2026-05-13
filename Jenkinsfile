@@ -8,6 +8,21 @@ pipeline {
     }
 
     stages {
+        stage('브랜치 필터') {
+            steps {
+                script {
+                    // main, dev 브랜치에서만 파이프라인을 실행합니다.
+                    // feat/* 등 작업 브랜치는 PR 단계에서 빌드하지 않습니다.
+                    if (env.BRANCH_NAME != 'main' && env.BRANCH_NAME != 'dev') {
+                        echo "빌드 대상 브랜치가 아닙니다: ${env.BRANCH_NAME} — 파이프라인을 건너뜁니다."
+                        currentBuild.result = 'NOT_BUILT'
+                        error("빌드 대상 브랜치 아님 (main, dev만 허용)")
+                    }
+                    echo "빌드 대상 브랜치 확인: ${env.BRANCH_NAME}"
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
                 // 멀티브랜치에서는 현재 브랜치에 맞는 소스를 자동으로 가져옵니다.
@@ -26,9 +41,8 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 script {
-                    // 브랜치 이름을 태그로 사용하여 이미지 생성 (latest 오염 방지)
-                    // env.BRANCH_NAME은 멀티브랜치 파이프라인에서 제공하는 환경 변수입니다.
-                    def branchTag = env.BRANCH_NAME.replace("/", "-") 
+                    // 브랜치 이름을 그대로 태그로 사용 (main, dev만 도달하므로 한글 변환 불필요)
+                    def branchTag = env.BRANCH_NAME
                     sh """
                         docker build -t $REGISTRY/$IMAGE_NAME:${branchTag} -f serving/Dockerfile .
                         docker push $REGISTRY/$IMAGE_NAME:${branchTag}
@@ -37,8 +51,9 @@ pipeline {
             }
         }
 
-        stage('Deploy to Dev/Prod') {
-            // [중요] 오직 main 브랜치일 때만 실제 서버에 배포를 수행합니다.
+        stage('Deploy') {
+            // main 브랜치일 때만 온프레미스 서버에 배포합니다.
+            // dev 브랜치는 Build & Push까지만 수행합니다.
             when {
                 branch 'main'
             }
@@ -46,11 +61,7 @@ pipeline {
                 sshagent(['sofit-app-ssh']) {
                     sh '''
                         ssh -o StrictHostKeyChecking=no ubuntu@$APP_SERVER "
-                            # main 브랜치 태그인 'main' 이미지를 pull
                             docker pull $REGISTRY/$IMAGE_NAME:main &&
-                            # docker-compose.yml에서 사용할 이미지 태그를 환경변수로 넘기거나, 
-                            # 혹은 docker-compose 파일 자체가 latest를 보고 있다면 
-                            # 배포 단계에서만 latest 태그를 추가로 부여할 수도 있습니다.
                             docker tag $REGISTRY/$IMAGE_NAME:main $REGISTRY/$IMAGE_NAME:latest &&
                             docker-compose -f /home/ubuntu/docker-compose.yml up -d sofit-ai
                         "
@@ -63,5 +74,6 @@ pipeline {
     post {
         success { echo "${env.BRANCH_NAME} 브랜치 빌드 성공" }
         failure { echo "${env.BRANCH_NAME} 브랜치 빌드 실패" }
+        not_built { echo "${env.BRANCH_NAME} 브랜치는 빌드 대상이 아닙니다." }
     }
 }
