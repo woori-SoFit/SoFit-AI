@@ -41,7 +41,6 @@
 - **구조**: 모노레포
     - `packages/user`: 고객용 앱
     - `packages/admin`: 은행원+개발자용 앱
-    - `packages/common`: 공통 컴포넌트, 훅, 타입, 유틸
 - **상태관리**: React Query (서버 상태) + Zustand (클라이언트 상태)
 - **스타일링**: Tailwind CSS
 - **테스트**: Vitest + React Testing Library
