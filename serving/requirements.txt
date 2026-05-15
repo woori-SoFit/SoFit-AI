@@ -7,13 +7,13 @@ pydantic==2.11.4
 pydantic-settings==2.9.1
 
 # ── ML / XAI ───────────────────────────────────────────────
+# 서빙 환경에서도 필수:
+#   - lightgbm: .pkl 모델 로드 및 predict() 실행에 필요
+#   - shap: SHAP 값 계산 (XAI 설명 생성)
+#   - numpy/pandas: 입력 데이터 전처리
+#   - scikit-learn: 모델 내부 전처리 파이프라인 실행
 lightgbm==4.6.0
 shap==0.47.2
 numpy==2.2.5
 pandas==2.2.3
-scikit-learn==1.6.1   # LightGBM 학습 파이프라인 및 전처리 유틸
-
-# ── Test ───────────────────────────────────────────────────
-pytest==8.3.5
-pytest-cov==6.1.0
-httpx==0.28.1         # FastAPI TestClient 의존성
+scikit-learn==1.6.1

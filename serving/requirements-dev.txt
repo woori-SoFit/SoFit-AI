@@ -1,0 +1,6 @@
+# 테스트/개발 전용 의존성 (프로덕션 이미지에 포함되지 않음)
+-r requirements.txt
+
+pytest==8.3.5
+pytest-cov==6.1.0
+httpx==0.28.1         # FastAPI TestClient 의존성
