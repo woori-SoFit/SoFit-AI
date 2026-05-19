@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.api.deps import set_explainer, set_predictor
 from app.core.config import settings
 from app.core.constants import SGrade
+from advisor import Advisor
 from explainer import Explainer
 from predictor import Predictor
 from schemas import HealthResponse, PredictRequest, PredictResponse, ShapExplanation
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 # 싱글턴 객체 — lifespan에서 초기화 후 deps.py를 통해 주입
 predictor = Predictor()
 explainer = Explainer()
+advisor = Advisor()
 
 
 @asynccontextmanager
@@ -33,6 +35,9 @@ async def lifespan(app: FastAPI):
 
     if predictor.is_loaded:
         explainer.setup(predictor._model)
+
+    # Gemini LLM Advisor 초기화
+    advisor.setup()
 
     set_predictor(predictor)
     set_explainer(explainer)
@@ -95,11 +100,27 @@ async def predict(
         predicted_class=target_class,
     )
 
+    # 한국어 키워드 추출 (강점 3개 + 개선 포인트 3개)
+    strength_kw, improvement_kw = advisor.get_keywords(strengths, improvements)
+
+    # 관리자용 상세 기여도 (강점 5개 + 개선 포인트 5개, 한국어: 숫자)
+    strength_details, improvement_details = advisor.get_details(strengths, improvements)
+
     return PredictResponse(
         user_id=request.user_id,
         s_grade=s_grade,
         shap_explanation=ShapExplanation(
             target_grade=target_grade,
+            strengths=strengths,
+            improvements=improvements,
+        ),
+        strength_keywords=strength_kw,
+        improvement_keywords=improvement_kw,
+        strength_details=strength_details,
+        improvement_details=improvement_details,
+        advice=await advisor.generate_advice(
+            s_grade=s_grade.value,
+            target_grade=target_grade.value,
             strengths=strengths,
             improvements=improvements,
         ),

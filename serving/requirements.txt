@@ -17,3 +17,6 @@ shap==0.47.2
 numpy==2.2.5
 pandas==2.2.3
 scikit-learn==1.6.1
+
+# ── LLM (자연어 조언 생성) ─────────────────────────────────
+google-generativeai==0.8.5
