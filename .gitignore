@@ -3,6 +3,7 @@ models/*.pkl
 models/*.txt
 data/*.csv
 data/*.zip
+data/*.json
 
 # Python 관련 제외
 __pycache__/
