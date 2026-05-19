@@ -14,6 +14,10 @@ SoFit AI - 합성 학습 데이터 생성기 (고도화 버전)
 - 직원 1명 매출 상한선: 3,500만원으로 제한
 - 리뷰 수 업력 비례 스케일링: 신생 업장의 과도한 리뷰 방지
 - 부재기간 상한선: 업력(일수)을 초과하지 않도록 제한
+- 매출증가율/업종평균비율 분포 조정: 실제 상권 데이터(CS300001~CS300010) EDA 결과 반영
+  - 분기별 성장률: 평균 3.5%, 표준편차 12% (기존 2.0/8.0에서 변경)
+  - 연간 성장률: 평균 7.0%, 표준편차 18% (기존 5.0/15.0에서 변경)
+  - 매출/업종평균 비율: 중심 0.9, 표준편차 0.35 (소상공인 좌편향 반영)
 """
 
 import os
@@ -44,20 +48,32 @@ def generate_data(n: int = N) -> pd.DataFrame:
 
     # A1: 업력 (개월)
     business_age_months = np.clip(
-        (np.random.normal(36, 24, n) + lp * 20).astype(int), 1, 120
+        (np.random.normal(36, 24, n) + lp * 20).astype(int), 1, 240
     )
 
     # A2, A3: 매출증가율
+    # [수정] 실제 상권 데이터(CS300001~CS300010) EDA 결과 반영
+    # [수정] 분기별/연간 매출증가율 간 상관계수를 높이기 위해 공유 성장 팩터 사용
+    # 공유 성장 팩터: 업장 고유의 성장 역량 (lp + 개별 노이즈)
+    growth_factor = lp + np.random.normal(0, 0.15, n)  # 업장별 성장 잠재력
+    growth_factor = np.clip(growth_factor, -0.3, 1.3)
+
     quarterly_revenue_growth_rate = np.round(
-        np.random.normal(2.0, 8.0, n) + lp * 20, 2
+        3.5 + growth_factor * 18 + np.random.normal(0, 4.0, n), 2
     )
+    # 연간 = 분기별 × ~3 배율 + 추가 노이즈 (상관계수 0.7~0.85 목표)
     annual_revenue_growth_rate = np.round(
-        np.random.normal(5.0, 15.0, n) + lp * 40, 2
+        quarterly_revenue_growth_rate * 2.5 + np.random.normal(0, 6.0, n), 2
     )
 
     # A4: 매출/업종평균 비율
+    # [수정] 매출 성장률과 상관관계 부여: 성장률 높은 업장 → 업종 평균 대비 매출도 높음
+    # growth_factor를 공유하여 상관계수 0.4~0.6 확보
     revenue_vs_industry_avg_ratio = np.round(
-        np.clip(np.random.normal(1.0, 0.4, n) + lp * 0.6, 0.3, 3.0), 2
+        np.clip(
+            0.9 + growth_factor * 0.8 + np.random.normal(0, 0.25, n),
+            0.2, 3.5
+        ), 2
     )
 
     # B6 먼저 생성 (A5 매출 상한선 계산에 필요)
@@ -71,8 +87,11 @@ def generate_data(n: int = N) -> pd.DataFrame:
 
     # A5: 평균 거래금액 — 잠재력이 높을수록 매출 높음 (로그 정규 분포)
     # [수정] 직원 1명이면 매출 상한선 3,500만원으로 제한
+    # [수정] growth_factor와 상관관계 부여: 성장률 높은 업장 → 거래금액도 높음
     base_revenue = np.exp(
-        np.random.normal(np.log(15_000_000), 0.8, n) + lp * 1.0
+        np.random.normal(np.log(15_000_000), 0.6, n)
+        + growth_factor * 0.8
+        + np.random.normal(0, 0.3, n)
     )
     revenue_upper = np.where(employee_count == 1, 35_000_000, 80_000_000)
     avg_monthly_transaction_3m = np.round(
@@ -101,8 +120,12 @@ def generate_data(n: int = N) -> pd.DataFrame:
     max_inactive_days = np.minimum(max_inactive_raw, business_age_days)
 
     # A8: 온라인 플랫폼 활동성 지수
+    # [수정] 매출 성장률과 상관관계 부여: 온라인 활동 활발 → 매출 성장 높음
     online_platform_activity_index = np.round(
-        np.clip(np.random.normal(50, 20, n) + lp * 30, 0, 100), 2
+        np.clip(
+            np.random.normal(50, 15, n) + growth_factor * 25 + lp * 10,
+            0, 100
+        ), 2
     )
 
     # A9: 매출증가율 / 근로자수
@@ -164,9 +187,13 @@ def generate_data(n: int = N) -> pd.DataFrame:
     # B5: 리뷰 관련
     revenue_normalized = (avg_monthly_transaction_3m - 3_000_000) / (80_000_000 - 3_000_000)
 
-    # [수정] 평점 분포 현실화: 중심 3.2, 표준편차 0.9로 2~3점 업장도 자연스럽게 생성
+    # [수정] 평점 분포 현실화 + 매출 성장률과 상관관계 부여
+    # 성장률 높은 업장 → 서비스 품질 좋음 → 평점 높음
     review_rating = np.round(
-        np.clip(np.random.normal(3.2, 0.9, n) + lp * 1.2, 1.0, 5.0), 1
+        np.clip(
+            np.random.normal(3.2, 0.7, n) + growth_factor * 0.8 + lp * 0.5,
+            1.0, 5.0
+        ), 1
     )
 
     # [수정] 리뷰 수 업력 비례 스케일링: 업력 짧은 업장의 과도한 리뷰 방지
@@ -183,9 +210,12 @@ def generate_data(n: int = N) -> pd.DataFrame:
     delivery_rating = np.round(
         np.clip(review_rating + np.random.normal(0, 0.2, n), 1.0, 5.0), 1
     )
+    # [수정] 배달 주문 건수: 매출 성장률과 상관관계 부여
+    # growth_factor 높은 업장 → 배달 주문도 활발
     delivery_order_count = np.clip(
-        (np.random.exponential(200, n) * (0.2 + online_platform_activity_index / 100 * 3)
-         + lp * 500).astype(int), 0, 5000
+        (np.random.exponential(150, n)
+         * (0.3 + online_platform_activity_index / 100 * 2.5 + growth_factor * 1.5)
+         + lp * 300).astype(int), 0, 5000
     )
     positive_review_ratio = np.round(
         np.clip(60 + review_rating * 6 + np.random.normal(0, 5, n), 40, 100), 2
