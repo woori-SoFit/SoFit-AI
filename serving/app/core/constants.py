@@ -29,3 +29,11 @@ class SGrade(str, Enum):
         if not (0 <= index < len(members)):
             raise ValueError(f"유효하지 않은 S등급 인덱스: {index} (0~9 범위여야 합니다)")
         return members[index]
+
+    def to_index(self) -> int:
+        """
+        S등급을 모델 출력 인덱스(0~9)로 변환.
+        S1 → 0, S10 → 9
+        """
+        members = list(SGrade)
+        return members.index(self)
