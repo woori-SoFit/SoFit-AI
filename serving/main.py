@@ -81,12 +81,16 @@ async def predict(
     # S등급 추론
     s_grade, input_array = predictor.predict(request.features)
 
-    # SHAP 설명 생성
+    # SHAP 설명 생성 (한 단계 위 등급 기준 — 등급 상승을 위한 개선 포인트 제공)
+    # S1이면 이미 최고 등급이므로 S1 기준 유지
+    target_class = max(0, s_grade.to_index() - 1)
+
     feature_names = list(request.features.keys())
     shap_features = explainer.explain(
         input_array=input_array,
         feature_names=feature_names,
         feature_values=request.features,
+        predicted_class=target_class,
     )
 
     return PredictResponse(
