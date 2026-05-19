@@ -51,12 +51,15 @@ MODEL_PATH = MODEL_DIR / f"scb_model_{MODEL_VERSION}.pkl"
 # ── LightGBM 하이퍼파라미터 ──────────────────────────────────
 LGBM_PARAMS: dict = {
     # 목적 함수: 다중 클래스 분류 (S1~S10, 10클래스)
-    "objective": "multiclass",
-    "num_class": 10,
-    "metric": "multi_logloss",
+    "objective": "multiclass", # 다중 분류 설정
+    "num_class": 10, # S1~S10의 10개 클래스 
+    "metric": "multi_logloss", # 모델이 예측한 확률 값이 실제 모델과 얼마나 차이나는지 측정. 
+                                # 정답을 강하게 확신했을 때 > 90% 확률로 S1이 정답이라고 생각했고, 실제로 정답이 S1이라면, loss는 낮게 측정됨
+                                # 정답을 확신하지 못했을 때 > 20% 확률로 S1이 정답이라고 생각했고, 실제로 정답이 S1이라면, loss는 크게 측정됨
+                                # 정답을 강하게 틀렸을 때 > 99% 확률로 S2가 정답이라고 생각했고, 실제로 정답이 S1이라면, loss는 매우 크게 측정됨
 
     # 트리 구조
-    "num_leaves": 63,
+    "num_leaves": 63,         # 하나의 tree가 가질 수 있는 최대 leaf 수
     "max_depth": -1,          # 제한 없음 (num_leaves로 복잡도 제어)
     "min_child_samples": 30,  # 과적합 방지: 리프 노드 최소 샘플 수
 
