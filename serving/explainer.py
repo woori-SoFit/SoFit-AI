@@ -55,9 +55,9 @@ class Explainer:
         feature_names: list[str],
         feature_values: dict[str, Any],
         predicted_class: int | None = None,
-    ) -> list[ShapFeature]:
+    ) -> tuple[list[ShapFeature], list[ShapFeature]]:
         """
-        입력 배열에 대한 SHAP 값을 계산하고 상위 N개 기여 변수를 반환.
+        입력 배열에 대한 SHAP 값을 계산하고 긍정/부정 기여 변수 Top5를 반환.
 
         Args:
             input_array: 모델 입력 배열 (shape: [1, n_features])
@@ -68,7 +68,9 @@ class Explainer:
                              None이면 전체 클래스 평균 절댓값으로 통합.
 
         Returns:
-            상위 shap_top_n개 ShapFeature 목록 (|SHAP 값| 기준 내림차순)
+            (strengths, improvements):
+                - strengths: 긍정 기여 Top5 (강점, 양수 SHAP 값 큰 순)
+                - improvements: 부정 기여 Top5 (개선 포인트, 음수 SHAP 절댓값 큰 순)
 
         SHAP 값 해석 (한 단계 위 등급 기준):
             - 양수: 목표 등급 방향으로 이미 기여 중 (강점)
@@ -80,6 +82,25 @@ class Explainer:
         # DataFrame으로 변환하여 피처명 보존 (SHAP 호환성)
         input_df = pd.DataFrame(input_array, columns=feature_names)
 
+        # ── [추가된 가드레일 로직] 수치형 컬럼들의 object 타입 깨짐 방지 ──
+        # input_array가 object 배열일 경우 모든 컬럼이 object 타입이 되므로 수치형 타입을 복원합니다.
+        for col in input_df.columns:
+            val = feature_values.get(col)
+            if isinstance(val, (int, np.integer)):
+                input_df[col] = input_df[col].astype(int)
+            elif isinstance(val, (float, np.floating)):
+                input_df[col] = input_df[col].astype(float)
+            elif isinstance(val, bool):
+                input_df[col] = input_df[col].astype(bool)
+        # ─────────────────────────────────────────────────────────────────
+
+        # LightGBM 학습 시 category 타입이었던 컬럼을 복원
+        # (학습 시 categorical_feature로 지정된 컬럼과 dtype이 일치해야 함)
+        categorical_cols = ["commercial_trend", "industry_trend"]
+        for col in categorical_cols:
+            if col in input_df.columns:
+                input_df[col] = input_df[col].astype("category")
+
         # SHAP 값 계산
         shap_values = self._explainer.shap_values(input_df)
 
@@ -87,21 +108,27 @@ class Explainer:
         # 각 원소 shape: (1, n_features)
         if isinstance(shap_values, list):
             if predicted_class is not None and 0 <= predicted_class < len(shap_values):
-                # 예측된 클래스의 SHAP 값 사용 (해당 등급에 대한 기여도)
                 combined = shap_values[predicted_class][0]
             else:
-                # 클래스 미지정 시 전체 클래스 평균 절댓값으로 통합
                 combined = np.mean(np.abs(shap_values), axis=0)[0]
+        elif shap_values.ndim == 3:
+            # (n_samples, n_features, n_classes)
+            if predicted_class is not None:
+                combined = shap_values[0, :, predicted_class]
+            else:
+                combined = np.mean(np.abs(shap_values[0]), axis=1)
         else:
             combined = shap_values[0]
 
-        # 절댓값 기준 상위 N개 인덱스 추출
-        top_indices = np.argsort(np.abs(combined))[::-1][: settings.shap_top_n]
+        # 긍정 기여 (양수) — 값이 큰 순으로 Top5
+        positive_indices = np.where(combined > 0)[0]
+        positive_sorted = positive_indices[np.argsort(combined[positive_indices])[::-1]]
+        positive_top = positive_sorted[: settings.shap_top_n]
 
-        result: list[ShapFeature] = []
-        for idx in top_indices:
+        strengths: list[ShapFeature] = []
+        for idx in positive_top:
             name = feature_names[idx]
-            result.append(
+            strengths.append(
                 ShapFeature(
                     feature_name=name,
                     shap_value=round(float(combined[idx]), 6),
@@ -109,4 +136,20 @@ class Explainer:
                 )
             )
 
-        return result
+        # 부정 기여 (음수) — 절댓값이 큰 순으로 Top5
+        negative_indices = np.where(combined < 0)[0]
+        negative_sorted = negative_indices[np.argsort(np.abs(combined[negative_indices]))[::-1]]
+        negative_top = negative_sorted[: settings.shap_top_n]
+
+        improvements: list[ShapFeature] = []
+        for idx in negative_top:
+            name = feature_names[idx]
+            improvements.append(
+                ShapFeature(
+                    feature_name=name,
+                    shap_value=round(float(combined[idx]), 6),
+                    feature_value=feature_values.get(name),
+                )
+            )
+
+        return strengths, improvements

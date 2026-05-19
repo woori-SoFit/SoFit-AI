@@ -27,8 +27,23 @@ class ShapFeature(BaseModel):
     """SHAP 기여 변수 단일 항목."""
 
     feature_name: str = Field(..., description="피처명")
-    shap_value: float = Field(..., description="SHAP 기여값 (양수: 등급 상승 기여, 음수: 등급 하락 기여)")
+    shap_value: float = Field(..., description="SHAP 기여값 (양수: 강점, 음수: 개선 포인트)")
     feature_value: Any = Field(..., description="실제 입력값")
+
+
+class ShapExplanation(BaseModel):
+    """
+    SHAP 설명 결과.
+    한 단계 위 등급을 목표로 긍정/부정 기여 변수를 분리하여 제공.
+    """
+
+    target_grade: SGrade = Field(..., description="목표 등급 (한 단계 위)")
+    strengths: list[ShapFeature] = Field(
+        ..., description="강점 Top5 — 목표 등급 방향으로 이미 기여 중인 변수"
+    )
+    improvements: list[ShapFeature] = Field(
+        ..., description="개선 포인트 Top5 — 목표 등급 도달을 방해하는 변수"
+    )
 
 
 class PredictResponse(BaseModel):
@@ -40,8 +55,8 @@ class PredictResponse(BaseModel):
 
     user_id: int = Field(..., description="사용자 ID")
     s_grade: SGrade = Field(..., description="성장 S등급 (S1~S10)")
-    shap_features: list[ShapFeature] = Field(
-        ..., description="상위 N개 SHAP 기여 변수 목록"
+    shap_explanation: ShapExplanation = Field(
+        ..., description="SHAP 기반 등급 상승 가이드 (강점 + 개선 포인트)"
     )
 
 

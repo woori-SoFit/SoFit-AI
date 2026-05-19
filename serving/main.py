@@ -5,9 +5,10 @@ from fastapi import FastAPI
 
 from app.api.deps import set_explainer, set_predictor
 from app.core.config import settings
+from app.core.constants import SGrade
 from explainer import Explainer
 from predictor import Predictor
-from schemas import HealthResponse, PredictRequest, PredictResponse
+from schemas import HealthResponse, PredictRequest, PredictResponse, ShapExplanation
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,9 +85,10 @@ async def predict(
     # SHAP 설명 생성 (한 단계 위 등급 기준 — 등급 상승을 위한 개선 포인트 제공)
     # S1이면 이미 최고 등급이므로 S1 기준 유지
     target_class = max(0, s_grade.to_index() - 1)
+    target_grade = SGrade.from_index(target_class)
 
     feature_names = list(request.features.keys())
-    shap_features = explainer.explain(
+    strengths, improvements = explainer.explain(
         input_array=input_array,
         feature_names=feature_names,
         feature_values=request.features,
@@ -96,5 +98,9 @@ async def predict(
     return PredictResponse(
         user_id=request.user_id,
         s_grade=s_grade,
-        shap_features=shap_features,
+        shap_explanation=ShapExplanation(
+            target_grade=target_grade,
+            strengths=strengths,
+            improvements=improvements,
+        ),
     )
