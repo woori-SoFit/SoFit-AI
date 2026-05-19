@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # SHAP 설명 시 반환할 상위 기여 변수 개수
     shap_top_n: int = 5
 
+    # Gemini LLM 설정
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.1-flash-lite"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
