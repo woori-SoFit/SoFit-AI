@@ -64,6 +64,12 @@ class PredictResponse(BaseModel):
     improvement_keywords: list[str] = Field(
         ..., description="노력이 필요한 점 3가지 (한국어 키워드)"
     )
+    strength_details: dict[str, float] = Field(
+        ..., description="관리자용 — 강점 5개 {한국어 파라미터명: SHAP 기여도}"
+    )
+    improvement_details: dict[str, float] = Field(
+        ..., description="관리자용 — 개선 포인트 5개 {한국어 파라미터명: SHAP 기여도}"
+    )
     advice: str = Field(
         default="", description="LLM이 생성한 자연어 조언 (Gemini 기반)"
     )

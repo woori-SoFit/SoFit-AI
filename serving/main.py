@@ -103,6 +103,9 @@ async def predict(
     # 한국어 키워드 추출 (강점 3개 + 개선 포인트 3개)
     strength_kw, improvement_kw = advisor.get_keywords(strengths, improvements)
 
+    # 관리자용 상세 기여도 (강점 5개 + 개선 포인트 5개, 한국어: 숫자)
+    strength_details, improvement_details = advisor.get_details(strengths, improvements)
+
     return PredictResponse(
         user_id=request.user_id,
         s_grade=s_grade,
@@ -113,6 +116,8 @@ async def predict(
         ),
         strength_keywords=strength_kw,
         improvement_keywords=improvement_kw,
+        strength_details=strength_details,
+        improvement_details=improvement_details,
         advice=await advisor.generate_advice(
             s_grade=s_grade.value,
             target_grade=target_grade.value,

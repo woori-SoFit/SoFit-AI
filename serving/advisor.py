@@ -129,6 +129,29 @@ class Advisor:
 
         return strength_keywords, improvement_keywords
 
+    def get_details(
+        self,
+        strengths: list[ShapFeature],
+        improvements: list[ShapFeature],
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """
+        관리자 페이지용 — 강점/개선 포인트 각 5개를 {한국어 파라미터: 기여도} 형태로 반환.
+
+        Returns:
+            (strength_details, improvement_details): 각 5개 {한국어명: SHAP값} 딕셔너리
+        """
+        strength_details = {}
+        for feat in strengths[:5]:
+            kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
+            strength_details[kr_name] = round(feat.shap_value, 6)
+
+        improvement_details = {}
+        for feat in improvements[:5]:
+            kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
+            improvement_details[kr_name] = round(feat.shap_value, 6)
+
+        return strength_details, improvement_details
+
     async def generate_advice(
         self,
         s_grade: str,
@@ -180,32 +203,33 @@ class Advisor:
         strengths_text = ""
         for feat in strengths:
             kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
-            strengths_text += f"  - {kr_name}: 현재 값 {feat.feature_value} (기여도: {feat.shap_value:+.4f})\n"
+            strengths_text += f"• {kr_name}: 현재 값 {feat.feature_value} (기여도: {feat.shap_value:+.4f})\n"
 
         improvements_text = ""
         for feat in improvements:
             kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
-            improvements_text += f"  - {kr_name}: 현재 값 {feat.feature_value} (기여도: {feat.shap_value:+.4f})\n"
+            improvements_text += f"• {kr_name}: 현재 값 {feat.feature_value} (기여도: {feat.shap_value:+.4f})\n"
 
         prompt = f"""당신은 소상공인 금융 컨설턴트입니다.
-아래 분석 결과를 바탕으로 소상공인에게 성장 등급을 올리기 위한 조언을 작성해주세요.
+            아래 분석 결과를 바탕으로 소상공인에게 성장 등급을 올리기 위한 조언을 작성해주세요.
 
-[현재 상황]
-- 현재 성장 등급: {s_grade} (S1이 최고, S10이 최저)
-- 목표 등급: {target_grade}
+            [현재 상황]
+            - 현재 성장 등급: {s_grade} (S1이 최고, S10이 최저)
+            - 목표 등급: {target_grade}
 
-[잘하고 있는 점 (강점)]
-{strengths_text if strengths_text else "  - 해당 없음"}
-
-[개선이 필요한 점]
-{improvements_text if improvements_text else "  - 해당 없음"}
-
-[작성 규칙]
-1. 강점은 격려하며 유지하도록 조언
-2. 개선 포인트는 구체적이고 실행 가능한 방법을 제안
-3. 전문 용어 없이 소상공인이 이해할 수 있는 쉬운 말로 작성
-4. 전체 3~5문장으로 간결하게 작성
-5. 한국어로 작성
-6. '-해요'체로 친근하게 작성
-"""
+            [잘하고 있는 점 (강점)]
+            {strengths_text if strengths_text else "• 해당 없음"}
+            [개선이 필요한 점]
+            {improvements_text if improvements_text else "• 해당 없음"}
+            [작성 규칙]
+            1. 아래 형식을 반드시 따라 작성하세요:
+            • 첫 문장: 강점을 격려하는 말 (1문장)
+            • 둘째~셋째 문장: 개선 포인트별 구체적이고 실행 가능한 조언 (각 1문장)
+            • 마지막 문장: 종합 격려 (1문장)
+            2. 전문 용어 없이 소상공인이 이해할 수 있는 쉬운 말로 작성
+            3. 전체 3~5문장, 각 문장은 bullet(•)로 시작
+            4. 한국어로 작성
+            5. '-해요'체로 친근하게 작성
+            6. 목표하는 등급을 언급하지 않기 
+        """
         return prompt

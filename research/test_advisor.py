@@ -7,11 +7,13 @@ Gemini LLM 자연어 조언 생성 테스트 스크립트
 [사전 조건]
     - .env 파일에 GEMINI_API_KEY 설정 필요
     - models/scb_model_v1.pkl 존재 필요
-    - pip install google-generativeai
+    - pip install google-generativeai python-dotenv
 
 [출력]
     - 예측 등급 및 목표 등급
-    - 강점/개선 포인트 (개선 불가 요소 필터링 적용)
+    - 강점/개선 포인트 Top5
+    - 한국어 키워드 3개씩
+    - 관리자용 상세 기여도 (한국어: 숫자) 5개씩
     - Gemini가 생성한 자연어 조언
 """
 
@@ -99,42 +101,7 @@ async def main() -> None:
     for imp in improvements:
         print(f"  ✗ {imp.feature_name}: {imp.feature_value} (SHAP: {imp.shap_value:+.4f})")
 
-    # ── 6. LLM 자연어 조언 생성 ──────────────────────────────
-    print(f"\n[Gemini 자연어 조언 생성 중...]")
-    advice = await advisor.generate_advice(
-        s_grade=s_grade.value,
-        target_grade=SGrade.from_index(target_class).value,
-        strengths=strengths,
-        improvements=improvements,
-    )
-
-    print(f"\n{'=' * 60}")
-    print(f"[생성된 조언]")
-    print(f"{'=' * 60}")
-    print(advice)
-    print(f"{'=' * 60}")
-
-    # ── 7. JSON 형태 출력 (API 응답 시뮬레이션) ───────────────
-    print(f"\n[API 응답 형태]")
-    response = {
-        "user_id": 12345,
-        "s_grade": predicted_grade,
-        "shap_explanation": {
-            "target_grade": target_grade,
-            "strengths": [
-                {"feature_name": s.feature_name, "shap_value": s.shap_value, "feature_value": s.feature_value}
-                for s in strengths
-            ],
-            "improvements": [
-                {"feature_name": imp.feature_name, "shap_value": imp.shap_value, "feature_value": imp.feature_value}
-                for imp in improvements
-            ],
-        },
-        "advice": advice,
-    }
-    print(json.dumps(response, indent=2, ensure_ascii=False, default=lambda x: float(x) if hasattr(x, 'item') else str(x)))
-
-    # ── 6. 한국어 키워드 추출 ─────────────────────────────────
+    # ── 6. 한국어 키워드 추출 (3개씩) ─────────────────────────
     strength_kw, improvement_kw = advisor.get_keywords(strengths, improvements)
 
     print(f"\n[잘하고 있는 점 (한국어 키워드 3개)]")
@@ -145,7 +112,18 @@ async def main() -> None:
     for i, kw in enumerate(improvement_kw, 1):
         print(f"  {i}. {kw}")
 
-    # ── 7. LLM 자연어 조언 생성 ──────────────────────────────
+    # ── 7. 관리자용 상세 기여도 (5개씩) ───────────────────────
+    strength_details, improvement_details = advisor.get_details(strengths, improvements)
+
+    print(f"\n[관리자용 — 강점 상세 기여도]")
+    for kr_name, value in strength_details.items():
+        print(f"  {kr_name}: {value:+.6f}")
+
+    print(f"\n[관리자용 — 개선 포인트 상세 기여도]")
+    for kr_name, value in improvement_details.items():
+        print(f"  {kr_name}: {value:+.6f}")
+
+    # ── 8. LLM 자연어 조언 생성 ──────────────────────────────
     print(f"\n[Gemini 자연어 조언 생성 중...]")
     advice = await advisor.generate_advice(
         s_grade=s_grade.value,
@@ -160,7 +138,7 @@ async def main() -> None:
     print(advice)
     print(f"{'=' * 60}")
 
-    # ── 8. JSON 형태 출력 (API 응답 시뮬레이션) ───────────────
+    # ── 9. JSON 형태 출력 (API 응답 시뮬레이션) ───────────────
     print(f"\n[API 응답 형태]")
     response = {
         "user_id": 12345,
@@ -178,6 +156,8 @@ async def main() -> None:
         },
         "strength_keywords": strength_kw,
         "improvement_keywords": improvement_kw,
+        "strength_details": strength_details,
+        "improvement_details": improvement_details,
         "advice": advice,
     }
     print(json.dumps(response, indent=2, ensure_ascii=False, default=lambda x: float(x) if hasattr(x, 'item') else str(x)))
