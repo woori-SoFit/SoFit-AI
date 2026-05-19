@@ -49,7 +49,7 @@ class ShapExplanation(BaseModel):
 class PredictResponse(BaseModel):
     """
     S등급 추론 응답 스키마.
-    등급(S1~S10) + SHAP 설명 포함.
+    등급(S1~S10) + SHAP 설명 + 자연어 조언 포함.
     BE가 이 응답을 DB에 저장 (AI 서버는 DB 직접 접근 금지).
     """
 
@@ -57,6 +57,15 @@ class PredictResponse(BaseModel):
     s_grade: SGrade = Field(..., description="성장 S등급 (S1~S10)")
     shap_explanation: ShapExplanation = Field(
         ..., description="SHAP 기반 등급 상승 가이드 (강점 + 개선 포인트)"
+    )
+    strength_keywords: list[str] = Field(
+        ..., description="잘하고 있는 점 3가지 (한국어 키워드)"
+    )
+    improvement_keywords: list[str] = Field(
+        ..., description="노력이 필요한 점 3가지 (한국어 키워드)"
+    )
+    advice: str = Field(
+        default="", description="LLM이 생성한 자연어 조언 (Gemini 기반)"
     )
 
 
