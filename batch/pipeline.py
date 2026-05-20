@@ -20,7 +20,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import shap
 
 # serving 모듈 재사용을 위해 경로 추가
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +33,8 @@ from batch.db import (
     insert_batch_execution,
     insert_evaluation_and_update_latest,
     insert_shap_explanation,
+    recover_orphaned_requests,
+    rollback_request_on_failure,
     update_batch_execution,
     update_evaluation_result_id,
     update_request_status,
@@ -139,6 +140,30 @@ def prepare_features(row: dict[str, Any]) -> pd.DataFrame:
     features = {col: row[col] for col in FEATURE_COLUMNS}
     df = pd.DataFrame([features])
 
+    # DECIMAL 컬럼 → float 변환 (PyMySQL이 Decimal 객체로 반환하므로)
+    decimal_cols = [
+        "quarterly_revenue_growth_rate", "annual_revenue_growth_rate",
+        "revenue_vs_industry_avg_ratio",
+        "avg_monthly_transaction_3m", "avg_monthly_transaction_6m", "avg_monthly_transaction_12m",
+        "online_platform_activity_index",
+        "revenue_growth_per_employee_3m", "revenue_growth_per_employee_6m", "revenue_growth_per_employee_12m",
+        "revenue_growth_per_business_age_3m", "revenue_growth_per_business_age_6m", "revenue_growth_per_business_age_12m",
+        "online_accessibility_score", "commercial_saturation_score",
+        "review_rating", "delivery_rating", "positive_review_ratio",
+    ]
+    for col in decimal_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(float)
+
+    # INT 컬럼 명시적 변환 (혹시 object로 들어올 경우 대비)
+    int_cols = [
+        "business_age_months", "days_since_last_transaction", "max_inactive_days",
+        "review_count", "delivery_order_count", "owner_experience_years", "employee_count",
+    ]
+    for col in int_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(int)
+
     # bool 컬럼 → int (DB에서 TINYINT로 오지만 명시적 변환)
     bool_cols = [
         "is_near_subway", "is_traditional_market",
@@ -182,27 +207,23 @@ def compute_shap(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     SHAP 값 계산 → 강점/개선 포인트 Top-N 반환.
+    LightGBM 네이티브 pred_contrib를 사용하여 category 타입 호환 문제를 우회.
 
     Returns:
         (strengths, improvements): 각각 {feature_name, shap_value, feature_value} 리스트
     """
-    # SHAP TreeExplainer는 수치형만 허용하므로 category → 정수 코드로 변환
-    shap_df = input_df.copy()
-    categorical_cols = ["commercial_trend", "industry_trend"]
-    for col in categorical_cols:
-        if col in shap_df.columns and shap_df[col].dtype.name == "category":
-            shap_df[col] = shap_df[col].cat.codes.astype(int)
+    # LightGBM 네이티브 SHAP (pred_contrib=True)
+    # 반환 shape: (n_samples, (n_features + 1) * n_classes)
+    # 각 클래스별로 n_features + 1(bias) 값이 연속으로 배치됨
+    booster = model.booster_
+    n_features = len(FEATURE_COLUMNS)
+    n_classes = 10  # S1~S10
 
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(shap_df)
-
-    # 다중 클래스: shap_values는 리스트 [클래스0, ..., 클래스9]
-    if isinstance(shap_values, list):
-        combined = shap_values[target_class][0]
-    elif shap_values.ndim == 3:
-        combined = shap_values[0, :, target_class]
-    else:
-        combined = shap_values[0]
+    contrib = booster.predict(input_df, pred_contrib=True)
+    # shape: (1, (n_features + 1) * n_classes)
+    contrib = contrib.reshape(1, n_classes, n_features + 1)
+    # target_class의 SHAP 값 추출 (bias 제외)
+    combined = contrib[0, target_class, :n_features]
 
     feature_names = FEATURE_COLUMNS
     feature_values = input_df.iloc[0].to_dict()
@@ -466,7 +487,10 @@ async def run_batch() -> None:
     model = load_model()
 
     with get_connection() as conn:
-        # REQUESTED 상태 조회
+        # ── 전략 B: 배치 시작 시 고아 건 복구 ──
+        recover_orphaned_requests(conn)
+
+        # REQUESTED 상태 조회 (retry_count < 3인 건만)
         requests = fetch_requested_calculations(conn)
 
         if not requests:
@@ -500,6 +524,14 @@ async def run_batch() -> None:
                 )
                 # 실패한 건은 롤백
                 conn.rollback()
+
+                # ── 전략 C: 실패 시 즉시 롤백 (REQUESTED로 되돌리거나 FAILED 처리) ──
+                rollback_request_on_failure(
+                    conn,
+                    request_id=row["request_id"],
+                    error_message=str(e),
+                    current_retry_count=row.get("retry_count", 0),
+                )
 
         # 배치 실행 이력 업데이트
         final_status = "COMPLETED" if fail_count == 0 else "FAILED"

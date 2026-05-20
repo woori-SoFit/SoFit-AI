@@ -108,7 +108,9 @@ CREATE TABLE IF NOT EXISTS s_calculation_request (
     request_id          BIGINT          NOT NULL AUTO_INCREMENT,
     target_user_id      BIGINT          NOT NULL COMMENT '산출 대상 고객 ID',
     s_evaluation_id     BIGINT          NULL COMMENT '산출 결과 ID (완료 전 NULL)',
-    status              ENUM('REQUESTED', 'IN_PROGRESS', 'COMPLETED') NOT NULL DEFAULT 'REQUESTED' COMMENT '요청 처리 상태',
+    status              ENUM('REQUESTED', 'IN_PROGRESS', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'REQUESTED' COMMENT '요청 처리 상태',
+    retry_count         INT             NOT NULL DEFAULT 0 COMMENT '재시도 횟수 (최대 3회 초과 시 FAILED)',
+    error_message       TEXT            NULL COMMENT '최종 실패 시 에러 메시지',
     requested_at        DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '요청 일시',
     completed_at        DATETIME        NULL COMMENT '산출 완료 일시',
 

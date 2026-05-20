@@ -40,21 +40,24 @@ def fetch_requested_calculations(conn: pymysql.connections.Connection) -> list[d
     """
     status='REQUESTED'인 s_calculation_request 목록을 조회.
     해당 사용자의 s_input_feature 데이터를 JOIN하여 반환.
+    retry_count가 최대 재시도 횟수(3) 미만인 건만 대상.
     """
     sql = """
         SELECT
             r.request_id,
             r.target_user_id,
+            r.retry_count,
             f.*
         FROM s_calculation_request r
         JOIN s_input_feature f ON f.user_id = r.target_user_id
         WHERE r.status = 'REQUESTED'
+          AND r.retry_count < 3
         ORDER BY r.requested_at ASC
     """
     with conn.cursor() as cursor:
         cursor.execute(sql)
         results = cursor.fetchall()
-    logger.info("REQUESTED 상태 산출 요청 %d건 조회", len(results))
+    logger.info("REQUESTED 상태 산출 요청 %d건 조회 (retry < 3)", len(results))
     return results
 
 
@@ -63,6 +66,7 @@ def update_request_status(
     request_id: int,
     status: str,
     s_evaluation_id: int | None = None,
+    error_message: str | None = None,
 ) -> None:
     """s_calculation_request 상태 업데이트."""
     if status == "COMPLETED":
@@ -73,6 +77,14 @@ def update_request_status(
         """
         with conn.cursor() as cursor:
             cursor.execute(sql, (status, s_evaluation_id, datetime.now(), request_id))
+    elif status == "FAILED":
+        sql = """
+            UPDATE s_calculation_request
+            SET status = %s, error_message = %s
+            WHERE request_id = %s
+        """
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (status, error_message, request_id))
     else:
         sql = """
             UPDATE s_calculation_request
@@ -203,3 +215,92 @@ def update_evaluation_result_id(
     """
     with conn.cursor() as cursor:
         cursor.execute(sql, (result_id, evaluation_id))
+
+
+# ── 재시도 전략 관련 함수 ─────────────────────────────────────
+
+MAX_RETRY_COUNT: int = 3
+
+
+def recover_orphaned_requests(conn: pymysql.connections.Connection) -> int:
+    """
+    전략 B: 배치 시작 시 고아 건 복구.
+    IN_PROGRESS 상태로 남아있는 건을 REQUESTED로 되돌리고 retry_count를 1 증가.
+    단일 프로세스 배치이므로 IN_PROGRESS는 이전 실행에서 비정상 종료된 건.
+
+    Returns:
+        복구된 건수
+    """
+    # retry_count가 최대치 미만인 건만 REQUESTED로 복구
+    sql_recover = """
+        UPDATE s_calculation_request
+        SET status = 'REQUESTED', retry_count = retry_count + 1
+        WHERE status = 'IN_PROGRESS'
+          AND retry_count < %s
+    """
+    # retry_count가 최대치 이상인 건은 FAILED 처리
+    sql_fail = """
+        UPDATE s_calculation_request
+        SET status = 'FAILED', error_message = '최대 재시도 횟수 초과 (비정상 종료 복구)'
+        WHERE status = 'IN_PROGRESS'
+          AND retry_count >= %s
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql_recover, (MAX_RETRY_COUNT,))
+        recovered = cursor.rowcount
+
+        cursor.execute(sql_fail, (MAX_RETRY_COUNT,))
+        failed = cursor.rowcount
+
+    conn.commit()
+
+    if recovered > 0:
+        logger.info("고아 건 복구: %d건을 REQUESTED로 되돌림 (retry_count +1)", recovered)
+    if failed > 0:
+        logger.warning("고아 건 최종 실패: %d건 FAILED 처리 (최대 재시도 초과)", failed)
+
+    return recovered
+
+
+def rollback_request_on_failure(
+    conn: pymysql.connections.Connection,
+    request_id: int,
+    error_message: str,
+    current_retry_count: int,
+) -> None:
+    """
+    전략 C: 실패 시 즉시 롤백.
+    retry_count를 1 증가시키고:
+    - 최대 재시도 미만이면 REQUESTED로 되돌림 (다음 배치에서 재시도)
+    - 최대 재시도 이상이면 FAILED 처리 (관리자 알림 대상)
+    """
+    new_retry_count = current_retry_count + 1
+
+    if new_retry_count >= MAX_RETRY_COUNT:
+        # 최대 재시도 초과 → FAILED
+        sql = """
+            UPDATE s_calculation_request
+            SET status = 'FAILED', retry_count = %s, error_message = %s
+            WHERE request_id = %s
+        """
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (new_retry_count, error_message, request_id))
+        conn.commit()
+        logger.warning(
+            "최종 실패 처리: request_id=%d (retry_count=%d, 최대 %d회 초과)",
+            request_id, new_retry_count, MAX_RETRY_COUNT,
+        )
+    else:
+        # 재시도 가능 → REQUESTED로 롤백
+        sql = """
+            UPDATE s_calculation_request
+            SET status = 'REQUESTED', retry_count = %s, error_message = %s
+            WHERE request_id = %s
+        """
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (new_retry_count, error_message, request_id))
+        conn.commit()
+        logger.info(
+            "재시도 대기: request_id=%d (retry_count=%d/%d)",
+            request_id, new_retry_count, MAX_RETRY_COUNT,
+        )

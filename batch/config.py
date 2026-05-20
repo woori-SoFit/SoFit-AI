@@ -29,4 +29,4 @@ SHAP_TOP_N: int = int(os.getenv("SHAP_TOP_N", "5"))
 
 # ── Gemini LLM 설정 ──────────────────────────────────────────
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")

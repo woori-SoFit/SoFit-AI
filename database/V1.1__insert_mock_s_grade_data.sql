@@ -43,13 +43,13 @@ INSERT INTO s_input_feature (
 -- ====================================================================
 -- 데이터 설명:
 -- 1번째 행: 1001번 고객이 대출 신청을 하여 배치 처리를 기다리는 요청 상태 (REQUESTED)
--- 2번째 행: 1002번 고객에 대해 은행원이 요청하여 이미 처리가 완료된 상태 (COMPLETED)
+-- 2번째 행: 1002번 고객에 대해 요청된 상태 (REQUESTED)
 INSERT INTO s_calculation_request (
-    request_id, target_user_id, s_evaluation_id, status, requested_at, completed_at
+    request_id, target_user_id, s_evaluation_id, status, retry_count, error_message, requested_at, completed_at
 ) VALUES
 (
-    1, 1001, NULL, 'REQUESTED', NOW(), NULL
+    1, 1001, NULL, 'REQUESTED', 0, NULL, NOW(), NULL
 ),
 (
-    2, 1002, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL
+    2, 1002, NULL, 'IN_PROGRESS', 0, NULL, DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL
 );
