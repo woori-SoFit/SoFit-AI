@@ -326,7 +326,7 @@ async def generate_advice(
         return advice
     except Exception as e:
         logger.error("Gemini 호출 실패: %s", str(e))
-        return f"조언 생성 중 오류 발생: {str(e)}"
+        return ""
 
 
 def _build_prompt(

@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS shap_explanation (
     improvement_keywords    JSON            NOT NULL COMMENT '개선점 키워드 목록 (Array). S1이면 []',
     strength_details        JSON            NOT NULL COMMENT '강점 상세 점수 Map (Key-Value)',
     improvement_details     JSON            NOT NULL COMMENT '개선점 상세 점수 Map (Key-Value). S1이면 {}',
-    advice                  TEXT            NOT NULL COMMENT 'AI 생성 조언. S1이면 강점 유지 조언만 포함',
+    advice                  TEXT            NULL COMMENT 'AI 생성 조언. S1이면 강점 유지 조언만 포함',
     created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '데이터 생성 일시',
 
     PRIMARY KEY (result_id),
