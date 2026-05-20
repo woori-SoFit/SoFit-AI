@@ -217,6 +217,50 @@ def update_evaluation_result_id(
         cursor.execute(sql, (result_id, evaluation_id))
 
 
+# ── 월별 배치 관련 함수 ───────────────────────────────────────
+
+
+def fetch_all_latest_features(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
+    """
+    월별 배치용: 전체 사용자의 최신 s_input_feature 레코드를 조회.
+    사용자별 created_at이 가장 최근인 레코드 1건만 반환.
+    """
+    sql = """
+        SELECT f.*
+        FROM s_input_feature f
+        INNER JOIN (
+            SELECT user_id, MAX(created_at) AS max_created_at
+            FROM s_input_feature
+            GROUP BY user_id
+        ) latest ON f.user_id = latest.user_id AND f.created_at = latest.max_created_at
+        ORDER BY f.user_id ASC
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        results = cursor.fetchall()
+    logger.info("월별 배치 대상: 전체 %d명 사용자의 최신 피처 조회", len(results))
+    return results
+
+
+def complete_requests_for_user(
+    conn: pymysql.connections.Connection,
+    user_id: int,
+    s_evaluation_id: int,
+) -> int:
+    """
+    월별 배치에서 사용자 처리 완료 시, 해당 사용자의 REQUESTED 상태 요청을 함께 COMPLETED 처리.
+    Returns: 처리된 요청 건수
+    """
+    sql = """
+        UPDATE s_calculation_request
+        SET status = 'COMPLETED', s_evaluation_id = %s, completed_at = %s
+        WHERE target_user_id = %s AND status = 'REQUESTED'
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (s_evaluation_id, datetime.now(), user_id))
+        return cursor.rowcount
+
+
 # ── 재시도 전략 관련 함수 ─────────────────────────────────────
 
 MAX_RETRY_COUNT: int = 3

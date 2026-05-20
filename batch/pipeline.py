@@ -28,6 +28,8 @@ sys.path.insert(0, str(_PROJECT_ROOT / "serving"))
 from app.core.constants import SGrade
 from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N
 from batch.db import (
+    complete_requests_for_user,
+    fetch_all_latest_features,
     fetch_requested_calculations,
     get_connection,
     insert_batch_execution,
@@ -478,9 +480,9 @@ async def process_single_request(
 
 
 async def run_batch() -> None:
-    """배치 메인 실행 함수."""
+    """일일 배치 메인 실행 함수 (DAILY)."""
     logger.info("=" * 60)
-    logger.info("S등급 산출 배치 시작")
+    logger.info("S등급 산출 일일 배치 시작 (DAILY)")
     logger.info("=" * 60)
 
     # 모델 로드
@@ -541,7 +543,150 @@ async def run_batch() -> None:
 
         logger.info("-" * 60)
         logger.info(
-            "배치 완료: 성공=%d, 실패=%d, 상태=%s",
+            "일일 배치 완료: 성공=%d, 실패=%d, 상태=%s",
+            success_count, fail_count, final_status,
+        )
+        logger.info("=" * 60)
+
+
+async def process_single_user(
+    model: Any,
+    row: dict[str, Any],
+    batch_execution_id: int,
+    conn: Any,
+) -> None:
+    """
+    월별 배치용: 단일 사용자 처리 (추론 → SHAP → 조언 → DB 적재).
+    s_calculation_request를 거치지 않고 s_input_feature에서 직접 처리.
+    처리 완료 시 해당 사용자의 REQUESTED 요청도 함께 소화.
+    """
+    user_id = row["user_id"]
+    biz_data_id = row["biz_data_id"]
+
+    logger.info("월별 처리 시작: user_id=%d", user_id)
+
+    # 1. 피처 준비 및 모델 추론
+    input_df = prepare_features(row)
+    s_grade, score = predict_grade(model, input_df)
+    target_grade = get_target_grade(s_grade)
+
+    logger.info(
+        "추론 완료: user_id=%d, grade=%s, score=%.4f, target=%s",
+        user_id, s_grade.value, score, target_grade.value,
+    )
+
+    # 2. SHAP 계산
+    target_class = target_grade.to_index()
+    strengths, improvements = compute_shap(model, input_df, target_class)
+
+    # 3. 키워드 및 상세 추출
+    strength_keywords, improvement_keywords = extract_keywords(strengths, improvements)
+    strength_details, improvement_details = extract_details(strengths, improvements)
+
+    # S1인 경우 개선점 비우기
+    if s_grade == SGrade.S1:
+        improvement_keywords = []
+        improvement_details = {}
+
+    # 4. LLM 조언 생성
+    advice = await generate_advice(
+        s_grade.value, target_grade.value, strengths, improvements
+    )
+
+    # 5. DB 적재 (트랜잭션)
+    evaluation_id = insert_evaluation_and_update_latest(
+        conn, user_id, biz_data_id, batch_execution_id, s_grade.value, score
+    )
+
+    result_id = insert_shap_explanation(
+        conn,
+        evaluation_id=evaluation_id,
+        user_id=user_id,
+        s_grade=s_grade.value,
+        target_grade=target_grade.value,
+        strength_keywords=json.dumps(strength_keywords, ensure_ascii=False),
+        improvement_keywords=json.dumps(improvement_keywords, ensure_ascii=False),
+        strength_details=json.dumps(strength_details, ensure_ascii=False),
+        improvement_details=json.dumps(improvement_details, ensure_ascii=False),
+        advice=advice,
+    )
+
+    update_evaluation_result_id(conn, evaluation_id, result_id)
+
+    # 6. 해당 사용자의 REQUESTED 요청이 있으면 함께 COMPLETED 처리
+    completed_requests = complete_requests_for_user(conn, user_id, evaluation_id)
+    if completed_requests > 0:
+        logger.info(
+            "user_id=%d의 REQUESTED 요청 %d건 함께 완료 처리",
+            user_id, completed_requests,
+        )
+
+    # 건별 커밋
+    conn.commit()
+
+    logger.info(
+        "월별 처리 완료: user_id=%d, grade=%s, evaluation_id=%d",
+        user_id, s_grade.value, evaluation_id,
+    )
+
+
+async def run_monthly_batch() -> None:
+    """월별 배치 메인 실행 함수 (MONTHLY). 전체 사용자 등급 갱신."""
+    logger.info("=" * 60)
+    logger.info("S등급 산출 월별 배치 시작 (MONTHLY)")
+    logger.info("=" * 60)
+
+    # 모델 로드
+    model = load_model()
+
+    with get_connection() as conn:
+        # ── 전략 B: 배치 시작 시 고아 건 복구 ──
+        recover_orphaned_requests(conn)
+
+        # 전체 사용자의 최신 피처 조회
+        all_features = fetch_all_latest_features(conn)
+
+        if not all_features:
+            logger.info("처리할 사용자가 없습니다. 배치 종료.")
+            return
+
+        # 배치 실행 이력 생성
+        batch_execution_id = insert_batch_execution(
+            conn,
+            execution_type="AUTO",
+            execution_cycle="MONTHLY",
+            total_count=len(all_features),
+        )
+        logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(all_features))
+
+        success_count = 0
+        fail_count = 0
+        last_error = None
+
+        for row in all_features:
+            try:
+                await process_single_user(model, row, batch_execution_id, conn)
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                last_error = str(e)
+                logger.error(
+                    "월별 처리 실패: user_id=%d, error=%s",
+                    row["user_id"], str(e),
+                    exc_info=True,
+                )
+                # 실패한 건은 롤백
+                conn.rollback()
+
+        # 배치 실행 이력 업데이트
+        final_status = "COMPLETED" if fail_count == 0 else "FAILED"
+        update_batch_execution(
+            conn, batch_execution_id, final_status, success_count, fail_count, last_error
+        )
+
+        logger.info("-" * 60)
+        logger.info(
+            "월별 배치 완료: 성공=%d, 실패=%d, 상태=%s",
             success_count, fail_count, final_status,
         )
         logger.info("=" * 60)
