@@ -1,6 +1,10 @@
 """
 MySQL 데이터베이스 연결 및 쿼리 모듈.
 배치 처리에 필요한 CRUD 작업을 담당한다.
+
+[트랜잭션 규칙]
+- db.py는 쿼리 실행만 담당한다 (commit/rollback 하지 않음).
+- 트랜잭션 경계(commit/rollback)는 pipeline 계층에서 관리한다.
 """
 
 import logging
@@ -15,10 +19,22 @@ from batch.config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USERNAME
 
 logger = logging.getLogger(__name__)
 
+# ── 상태값 상수 ───────────────────────────────────────────────
+STATUS_REQUESTED = "REQUESTED"
+STATUS_IN_PROGRESS = "IN_PROGRESS"
+STATUS_COMPLETED = "COMPLETED"
+STATUS_FAILED = "FAILED"
+STATUS_RUNNING = "RUNNING"
+
+MAX_RETRY_COUNT: int = 3
+
 
 @contextmanager
 def get_connection() -> Generator[pymysql.connections.Connection, None, None]:
-    """MySQL 커넥션 컨텍스트 매니저."""
+    """
+    MySQL 커넥션 컨텍스트 매니저.
+    예외 발생 시 rollback을 명시적으로 수행하여 미커밋 트랜잭션이 남지 않도록 한다.
+    """
     conn = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -32,15 +48,21 @@ def get_connection() -> Generator[pymysql.connections.Connection, None, None]:
     )
     try:
         yield conn
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+# ── 조회 함수 ────────────────────────────────────────────────
 
 
 def fetch_requested_calculations(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
     """
     status='REQUESTED'인 s_calculation_request 목록을 조회.
     해당 사용자의 s_input_feature 데이터를 JOIN하여 반환.
-    retry_count가 최대 재시도 횟수(3) 미만인 건만 대상.
+    retry_count가 최대 재시도 횟수 미만인 건만 대상.
     """
     sql = """
         SELECT
@@ -50,15 +72,40 @@ def fetch_requested_calculations(conn: pymysql.connections.Connection) -> list[d
             f.*
         FROM s_calculation_request r
         JOIN s_input_feature f ON f.user_id = r.target_user_id
-        WHERE r.status = 'REQUESTED'
-          AND r.retry_count < 3
+        WHERE r.status = %s
+          AND r.retry_count < %s
         ORDER BY r.requested_at ASC
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (STATUS_REQUESTED, MAX_RETRY_COUNT))
+        results = cursor.fetchall()
+    logger.info("REQUESTED 상태 산출 요청 %d건 조회 (retry < %d)", len(results), MAX_RETRY_COUNT)
+    return results
+
+
+def fetch_all_latest_features(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
+    """
+    월별 배치용: 전체 사용자의 최신 s_input_feature 레코드를 조회.
+    사용자별 created_at이 가장 최근인 레코드 1건만 반환.
+    """
+    sql = """
+        SELECT f.*
+        FROM s_input_feature f
+        INNER JOIN (
+            SELECT user_id, MAX(created_at) AS max_created_at
+            FROM s_input_feature
+            GROUP BY user_id
+        ) latest ON f.user_id = latest.user_id AND f.created_at = latest.max_created_at
+        ORDER BY f.user_id ASC
     """
     with conn.cursor() as cursor:
         cursor.execute(sql)
         results = cursor.fetchall()
-    logger.info("REQUESTED 상태 산출 요청 %d건 조회 (retry < 3)", len(results))
+    logger.info("월별 배치 대상: 전체 %d명 사용자의 최신 피처 조회", len(results))
     return results
+
+
+# ── s_calculation_request 관련 ────────────────────────────────
 
 
 def update_request_status(
@@ -69,7 +116,7 @@ def update_request_status(
     error_message: str | None = None,
 ) -> None:
     """s_calculation_request 상태 업데이트."""
-    if status == "COMPLETED":
+    if status == STATUS_COMPLETED:
         sql = """
             UPDATE s_calculation_request
             SET status = %s, s_evaluation_id = %s, completed_at = %s
@@ -77,7 +124,7 @@ def update_request_status(
         """
         with conn.cursor() as cursor:
             cursor.execute(sql, (status, s_evaluation_id, datetime.now(), request_id))
-    elif status == "FAILED":
+    elif status == STATUS_FAILED:
         sql = """
             UPDATE s_calculation_request
             SET status = %s, error_message = %s
@@ -95,6 +142,28 @@ def update_request_status(
             cursor.execute(sql, (status, request_id))
 
 
+def complete_requests_for_user(
+    conn: pymysql.connections.Connection,
+    user_id: int,
+    s_evaluation_id: int,
+) -> int:
+    """
+    월별 배치에서 사용자 처리 완료 시, 해당 사용자의 REQUESTED 상태 요청을 함께 COMPLETED 처리.
+    Returns: 처리된 요청 건수
+    """
+    sql = """
+        UPDATE s_calculation_request
+        SET status = %s, s_evaluation_id = %s, completed_at = %s
+        WHERE target_user_id = %s AND status = %s
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (STATUS_COMPLETED, s_evaluation_id, datetime.now(), user_id, STATUS_REQUESTED))
+        return cursor.rowcount
+
+
+# ── batch_execution_history 관련 ──────────────────────────────
+
+
 def insert_batch_execution(
     conn: pymysql.connections.Connection,
     execution_type: str,
@@ -105,11 +174,10 @@ def insert_batch_execution(
     sql = """
         INSERT INTO batch_execution_history
             (execution_type, execution_cycle, status, total_count, started_at)
-        VALUES (%s, %s, 'RUNNING', %s, %s)
+        VALUES (%s, %s, %s, %s, %s)
     """
     with conn.cursor() as cursor:
-        cursor.execute(sql, (execution_type, execution_cycle, total_count, datetime.now()))
-        conn.commit()
+        cursor.execute(sql, (execution_type, execution_cycle, STATUS_RUNNING, total_count, datetime.now()))
         return cursor.lastrowid
 
 
@@ -133,7 +201,9 @@ def update_batch_execution(
             sql,
             (status, success_count, fail_count, error_message, datetime.now(), execution_id),
         )
-        conn.commit()
+
+
+# ── s_evaluation_history 관련 ─────────────────────────────────
 
 
 def insert_evaluation_and_update_latest(
@@ -146,28 +216,44 @@ def insert_evaluation_and_update_latest(
 ) -> int:
     """
     s_evaluation_history에 새 레코드 삽입 + is_latest 갱신.
-    트랜잭션으로 처리: 기존 is_latest=0 → 새 레코드 is_latest=1.
+    기존 is_latest=0 → 새 레코드 is_latest=1.
     s_evaluation_id 반환.
     """
-    # 1. 기존 최신 레코드의 is_latest를 0으로 변경
     sql_update = """
         UPDATE s_evaluation_history
         SET is_latest = 0
         WHERE user_id = %s AND is_latest = 1
     """
-    # 2. 새 레코드 삽입
     sql_insert = """
         INSERT INTO s_evaluation_history
             (user_id, biz_data_id, batch_execution_id, grade, score, is_latest, status, evaluated_at)
-        VALUES (%s, %s, %s, %s, %s, 1, 'COMPLETED', %s)
+        VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
     """
     with conn.cursor() as cursor:
         cursor.execute(sql_update, (user_id,))
         cursor.execute(
             sql_insert,
-            (user_id, biz_data_id, batch_execution_id, grade, score, datetime.now()),
+            (user_id, biz_data_id, batch_execution_id, grade, score, STATUS_COMPLETED, datetime.now()),
         )
         return cursor.lastrowid
+
+
+def update_evaluation_result_id(
+    conn: pymysql.connections.Connection,
+    evaluation_id: int,
+    result_id: int,
+) -> None:
+    """s_evaluation_history의 result_id를 SHAP 결과 ID로 업데이트."""
+    sql = """
+        UPDATE s_evaluation_history
+        SET result_id = %s
+        WHERE s_evaluation_id = %s
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (result_id, evaluation_id))
+
+
+# ── shap_explanation 관련 ─────────────────────────────────────
 
 
 def insert_shap_explanation(
@@ -202,68 +288,7 @@ def insert_shap_explanation(
         return cursor.lastrowid
 
 
-def update_evaluation_result_id(
-    conn: pymysql.connections.Connection,
-    evaluation_id: int,
-    result_id: int,
-) -> None:
-    """s_evaluation_history의 result_id를 SHAP 결과 ID로 업데이트."""
-    sql = """
-        UPDATE s_evaluation_history
-        SET result_id = %s
-        WHERE s_evaluation_id = %s
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(sql, (result_id, evaluation_id))
-
-
-# ── 월별 배치 관련 함수 ───────────────────────────────────────
-
-
-def fetch_all_latest_features(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
-    """
-    월별 배치용: 전체 사용자의 최신 s_input_feature 레코드를 조회.
-    사용자별 created_at이 가장 최근인 레코드 1건만 반환.
-    """
-    sql = """
-        SELECT f.*
-        FROM s_input_feature f
-        INNER JOIN (
-            SELECT user_id, MAX(created_at) AS max_created_at
-            FROM s_input_feature
-            GROUP BY user_id
-        ) latest ON f.user_id = latest.user_id AND f.created_at = latest.max_created_at
-        ORDER BY f.user_id ASC
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(sql)
-        results = cursor.fetchall()
-    logger.info("월별 배치 대상: 전체 %d명 사용자의 최신 피처 조회", len(results))
-    return results
-
-
-def complete_requests_for_user(
-    conn: pymysql.connections.Connection,
-    user_id: int,
-    s_evaluation_id: int,
-) -> int:
-    """
-    월별 배치에서 사용자 처리 완료 시, 해당 사용자의 REQUESTED 상태 요청을 함께 COMPLETED 처리.
-    Returns: 처리된 요청 건수
-    """
-    sql = """
-        UPDATE s_calculation_request
-        SET status = 'COMPLETED', s_evaluation_id = %s, completed_at = %s
-        WHERE target_user_id = %s AND status = 'REQUESTED'
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(sql, (s_evaluation_id, datetime.now(), user_id))
-        return cursor.rowcount
-
-
 # ── 재시도 전략 관련 함수 ─────────────────────────────────────
-
-MAX_RETRY_COUNT: int = 3
 
 
 def recover_orphaned_requests(conn: pymysql.connections.Connection) -> int:
@@ -275,28 +300,24 @@ def recover_orphaned_requests(conn: pymysql.connections.Connection) -> int:
     Returns:
         복구된 건수
     """
-    # retry_count가 최대치 미만인 건만 REQUESTED로 복구
     sql_recover = """
         UPDATE s_calculation_request
-        SET status = 'REQUESTED', retry_count = retry_count + 1
-        WHERE status = 'IN_PROGRESS'
+        SET status = %s, retry_count = retry_count + 1
+        WHERE status = %s
           AND retry_count < %s
     """
-    # retry_count가 최대치 이상인 건은 FAILED 처리
     sql_fail = """
         UPDATE s_calculation_request
-        SET status = 'FAILED', error_message = '최대 재시도 횟수 초과 (비정상 종료 복구)'
-        WHERE status = 'IN_PROGRESS'
+        SET status = %s, error_message = '최대 재시도 횟수 초과 (비정상 종료 복구)'
+        WHERE status = %s
           AND retry_count >= %s
     """
     with conn.cursor() as cursor:
-        cursor.execute(sql_recover, (MAX_RETRY_COUNT,))
+        cursor.execute(sql_recover, (STATUS_REQUESTED, STATUS_IN_PROGRESS, MAX_RETRY_COUNT))
         recovered = cursor.rowcount
 
-        cursor.execute(sql_fail, (MAX_RETRY_COUNT,))
+        cursor.execute(sql_fail, (STATUS_FAILED, STATUS_IN_PROGRESS, MAX_RETRY_COUNT))
         failed = cursor.rowcount
-
-    conn.commit()
 
     if recovered > 0:
         logger.info("고아 건 복구: %d건을 REQUESTED로 되돌림 (retry_count +1)", recovered)
@@ -321,29 +342,25 @@ def rollback_request_on_failure(
     new_retry_count = current_retry_count + 1
 
     if new_retry_count >= MAX_RETRY_COUNT:
-        # 최대 재시도 초과 → FAILED
         sql = """
             UPDATE s_calculation_request
-            SET status = 'FAILED', retry_count = %s, error_message = %s
+            SET status = %s, retry_count = %s, error_message = %s
             WHERE request_id = %s
         """
         with conn.cursor() as cursor:
-            cursor.execute(sql, (new_retry_count, error_message, request_id))
-        conn.commit()
+            cursor.execute(sql, (STATUS_FAILED, new_retry_count, error_message, request_id))
         logger.warning(
             "최종 실패 처리: request_id=%d (retry_count=%d, 최대 %d회 초과)",
             request_id, new_retry_count, MAX_RETRY_COUNT,
         )
     else:
-        # 재시도 가능 → REQUESTED로 롤백
         sql = """
             UPDATE s_calculation_request
-            SET status = 'REQUESTED', retry_count = %s, error_message = %s
+            SET status = %s, retry_count = %s, error_message = %s
             WHERE request_id = %s
         """
         with conn.cursor() as cursor:
-            cursor.execute(sql, (new_retry_count, error_message, request_id))
-        conn.commit()
+            cursor.execute(sql, (STATUS_REQUESTED, new_retry_count, error_message, request_id))
         logger.info(
             "재시도 대기: request_id=%d (retry_count=%d/%d)",
             request_id, new_retry_count, MAX_RETRY_COUNT,

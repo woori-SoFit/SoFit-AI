@@ -28,6 +28,10 @@ sys.path.insert(0, str(_PROJECT_ROOT / "serving"))
 from app.core.constants import SGrade
 from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N
 from batch.db import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_IN_PROGRESS,
+    STATUS_REQUESTED,
     complete_requests_for_user,
     fetch_all_latest_features,
     fetch_requested_calculations,
@@ -413,7 +417,7 @@ async def process_single_request(
     logger.info("처리 시작: request_id=%d, user_id=%d", request_id, user_id)
 
     # 1. 요청 상태 → IN_PROGRESS
-    update_request_status(conn, request_id, "IN_PROGRESS")
+    update_request_status(conn, request_id, STATUS_IN_PROGRESS)
     conn.commit()
 
     # 2. 피처 준비 및 모델 추론
@@ -468,7 +472,7 @@ async def process_single_request(
     update_evaluation_result_id(conn, evaluation_id, result_id)
 
     # 6-4. 요청 상태 → COMPLETED
-    update_request_status(conn, request_id, "COMPLETED", s_evaluation_id=evaluation_id)
+    update_request_status(conn, request_id, STATUS_COMPLETED, s_evaluation_id=evaluation_id)
 
     # 커밋 (건별 커밋으로 부분 실패 시 이미 처리된 건 보존)
     conn.commit()
@@ -491,6 +495,7 @@ async def run_batch() -> None:
     with get_connection() as conn:
         # ── 전략 B: 배치 시작 시 고아 건 복구 ──
         recover_orphaned_requests(conn)
+        conn.commit()
 
         # REQUESTED 상태 조회 (retry_count < 3인 건만)
         requests = fetch_requested_calculations(conn)
@@ -506,6 +511,7 @@ async def run_batch() -> None:
             execution_cycle="DAILY",
             total_count=len(requests),
         )
+        conn.commit()
         logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(requests))
 
         success_count = 0
@@ -534,12 +540,14 @@ async def run_batch() -> None:
                     error_message=str(e),
                     current_retry_count=row.get("retry_count", 0),
                 )
+                conn.commit()
 
         # 배치 실행 이력 업데이트
-        final_status = "COMPLETED" if fail_count == 0 else "FAILED"
+        final_status = STATUS_COMPLETED if fail_count == 0 else STATUS_FAILED
         update_batch_execution(
             conn, batch_execution_id, final_status, success_count, fail_count, last_error
         )
+        conn.commit()
 
         logger.info("-" * 60)
         logger.info(
@@ -642,6 +650,7 @@ async def run_monthly_batch() -> None:
     with get_connection() as conn:
         # ── 전략 B: 배치 시작 시 고아 건 복구 ──
         recover_orphaned_requests(conn)
+        conn.commit()
 
         # 전체 사용자의 최신 피처 조회
         all_features = fetch_all_latest_features(conn)
@@ -657,6 +666,7 @@ async def run_monthly_batch() -> None:
             execution_cycle="MONTHLY",
             total_count=len(all_features),
         )
+        conn.commit()
         logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(all_features))
 
         success_count = 0
@@ -679,10 +689,11 @@ async def run_monthly_batch() -> None:
                 conn.rollback()
 
         # 배치 실행 이력 업데이트
-        final_status = "COMPLETED" if fail_count == 0 else "FAILED"
+        final_status = STATUS_COMPLETED if fail_count == 0 else STATUS_FAILED
         update_batch_execution(
             conn, batch_execution_id, final_status, success_count, fail_count, last_error
         )
+        conn.commit()
 
         logger.info("-" * 60)
         logger.info(
