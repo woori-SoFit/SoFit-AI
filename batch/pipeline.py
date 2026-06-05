@@ -553,10 +553,13 @@ async def process_single_request(
     )
 
 
-async def run_batch() -> None:
+async def run_batch(
+    execution_type: str = "AUTO",
+    triggered_by: int | None = None,
+) -> None:
     """일일 배치 메인 실행 함수 (DAILY)."""
     logger.info("=" * 60)
-    logger.info("S등급 산출 일일 배치 시작 (DAILY)")
+    logger.info("S등급 산출 일일 배치 시작 (DAILY, type=%s)", execution_type)
     logger.info("=" * 60)
 
     # 모델 로드
@@ -577,9 +580,10 @@ async def run_batch() -> None:
         # 배치 실행 이력 생성
         batch_execution_id = insert_batch_execution(
             conn,
-            execution_type="AUTO",
+            execution_type=execution_type,
             execution_cycle="DAILY",
             total_count=len(requests),
+            triggered_by=triggered_by,
         )
         conn.commit()
         logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(requests))
@@ -722,10 +726,13 @@ async def process_single_user(
     )
 
 
-async def run_monthly_batch() -> None:
+async def run_monthly_batch(
+    execution_type: str = "AUTO",
+    triggered_by: int | None = None,
+) -> None:
     """월별 배치 메인 실행 함수 (MONTHLY). 전체 사용자 등급 갱신."""
     logger.info("=" * 60)
-    logger.info("S등급 산출 월별 배치 시작 (MONTHLY)")
+    logger.info("S등급 산출 월별 배치 시작 (MONTHLY, type=%s)", execution_type)
     logger.info("=" * 60)
 
     # 모델 로드
@@ -746,9 +753,10 @@ async def run_monthly_batch() -> None:
         # 배치 실행 이력 생성
         batch_execution_id = insert_batch_execution(
             conn,
-            execution_type="AUTO",
+            execution_type=execution_type,
             execution_cycle="MONTHLY",
             total_count=len(all_features),
+            triggered_by=triggered_by,
         )
         conn.commit()
         logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(all_features))

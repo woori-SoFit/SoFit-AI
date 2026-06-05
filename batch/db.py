@@ -216,15 +216,16 @@ def insert_batch_execution(
     execution_type: str,
     execution_cycle: str,
     total_count: int,
+    triggered_by: int | None = None,
 ) -> int:
     """batch_execution_history에 배치 시작 레코드 삽입. execution_id 반환."""
     sql = """
         INSERT INTO batch_execution_history
-            (execution_type, execution_cycle, status, total_count, started_at)
-        VALUES (%s, %s, %s, %s, %s)
+            (execution_type, execution_cycle, triggered_by, status, total_count, started_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
     """
     with conn.cursor() as cursor:
-        cursor.execute(sql, (execution_type, execution_cycle, STATUS_RUNNING, total_count, datetime.now()))
+        cursor.execute(sql, (execution_type, execution_cycle, triggered_by, STATUS_RUNNING, total_count, datetime.now()))
         return cursor.lastrowid
 
 
