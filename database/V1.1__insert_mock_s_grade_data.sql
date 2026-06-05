@@ -1,10 +1,10 @@
 -- ====================================================================
--- 1. s_input_feature 테이블 Mock Data (2건)
+-- 1. s_grade_feature 테이블 Mock Data (2건)
 -- ====================================================================
 -- 데이터 설명:
 -- 1번째 행: 일반적인 성장세 매장 (분기/연간 매출 증가, 온라인 활성화 양호)
 -- 2번째 행: 전통시장 내 위치한 오프라인 중심 매장 (배달 없음, 업력 김)
-INSERT INTO s_input_feature (
+INSERT INTO s_grade_feature (
     feature_id, biz_data_id, user_id,
     business_age_months, quarterly_revenue_growth_rate, annual_revenue_growth_rate, revenue_vs_industry_avg_ratio,
     avg_monthly_transaction_3m, avg_monthly_transaction_6m, avg_monthly_transaction_12m,
@@ -39,17 +39,17 @@ INSERT INTO s_input_feature (
 );
 
 -- ====================================================================
--- 2. s_calculation_request 테이블 Mock Data (2건)
+-- 2. s_grade_history 테이블 Mock Data (2건)
 -- ====================================================================
 -- 데이터 설명:
 -- 1번째 행: 1001번 고객이 대출 신청을 하여 배치 처리를 기다리는 요청 상태 (REQUESTED)
 -- 2번째 행: 1002번 고객에 대해 요청된 상태 (REQUESTED)
-INSERT INTO s_calculation_request (
-    request_id, target_user_id, s_evaluation_id, status, retry_count, error_message, requested_at, completed_at
+INSERT INTO s_grade_history (
+    s_grade_id, user_id, feature_id, batch_execution_id, status, requested_at, evaluated_at
 ) VALUES
 (
-    1, 1001, NULL, 'REQUESTED', 0, NULL, NOW(), NULL
+    1, 1001, 1, NULL, 'REQUESTED', NOW(), NULL
 ),
 (
-    2, 1002, NULL, 'IN_PROGRESS', 0, NULL, DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL
+    2, 1002, 2, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL
 );
