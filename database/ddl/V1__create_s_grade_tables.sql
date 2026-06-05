@@ -1,7 +1,7 @@
 -- ============================================================
 -- SoFit S등급 관련 테이블 DDL
 -- 버전: V1
--- 설명: S등급 산출에 필요한 테이블 생성 (입력 피처, 배치 이력, 산출 이력, 산출 요청, SHAP 설명)
+-- 설명: S등급 산출에 필요한 테이블 생성 (입력 피처, 배치 이력, 산출 이력, 산출 결과 리포트)
 -- 대상 DB: sofit (MySQL 8.x)
 -- ============================================================
 
@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS batch_execution_history (
   COMMENT='Python Batch 실행 이력. AUTO/MANUAL, DAILY/MONTHLY 구분';
 
 -- ------------------------------------------------------------
--- 2. S 입력 피처
+-- 2. S등급 피처
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS s_input_feature (
+CREATE TABLE IF NOT EXISTS s_grade_feature (
     feature_id                          BIGINT          NOT NULL AUTO_INCREMENT,
     biz_data_id                         BIGINT          NOT NULL COMMENT '원본 My Biz Data ID',
     user_id                             BIGINT          NOT NULL COMMENT '사업자 사용자 ID',
@@ -79,76 +79,51 @@ CREATE TABLE IF NOT EXISTS s_input_feature (
   COMMENT='My Biz Data → LightGBM 모델 입력용 계량·비계량 변수 가공 결과';
 
 -- ------------------------------------------------------------
--- 3. S 등급 산출 이력
+-- 3. S등급 산출 이력
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS s_evaluation_history (
-    s_evaluation_id     BIGINT          NOT NULL AUTO_INCREMENT,
+CREATE TABLE IF NOT EXISTS s_grade_history (
+    s_grade_id          BIGINT          NOT NULL AUTO_INCREMENT,
     user_id             BIGINT          NOT NULL COMMENT '평가 대상 사업자 ID',
-    result_id           BIGINT          NULL COMMENT 'SHAP 설명 ID (산출 완료 후 설정)',
-    biz_data_id         BIGINT          NOT NULL COMMENT '산출에 사용된 My Biz Data ID',
-    batch_execution_id  BIGINT          NOT NULL COMMENT '산출을 트리거한 배치 실행 ID',
-    grade               VARCHAR(5)      NULL COMMENT 'S 등급 결과 (S1~S10, 산출 전 NULL)',
-    score               DECIMAL(10,4)   NULL COMMENT 'LightGBM 모델 원점수',
-    is_latest           TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '현재 최신 등급 여부 (사용자별 최근 산출에만 1)',
-    status              ENUM('PENDING', 'CALCULATING', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'PENDING' COMMENT '산출 상태',
+    feature_id          BIGINT          NOT NULL COMMENT '산출에 사용할 피처 ID (FK → s_grade_feature)',
+    batch_execution_id  BIGINT          NULL COMMENT '산출을 트리거한 배치 실행 ID',
+    status              ENUM('REQUESTED', 'CALCULATING', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'REQUESTED' COMMENT '산출 상태',
+    requested_at        DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '등급 산출 요청 일시',
     evaluated_at        DATETIME        NULL COMMENT '등급 산출 완료 일시',
 
-    PRIMARY KEY (s_evaluation_id),
-    INDEX idx_s_evaluation_user_latest (user_id, is_latest),
-    INDEX idx_s_evaluation_batch (batch_execution_id),
-    CONSTRAINT fk_s_evaluation_batch
-        FOREIGN KEY (batch_execution_id) REFERENCES batch_execution_history (execution_id)
+    PRIMARY KEY (s_grade_id),
+    INDEX idx_s_grade_history_user (user_id),
+    INDEX idx_s_grade_history_status (status),
+    CONSTRAINT fk_s_grade_history_batch
+        FOREIGN KEY (batch_execution_id) REFERENCES batch_execution_history (execution_id),
+    CONSTRAINT fk_s_grade_history_feature
+        FOREIGN KEY (feature_id) REFERENCES s_grade_feature (feature_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='S 등급 산출 결과 이력. is_latest 갱신 시 트랜잭션 필수';
+  COMMENT='S등급 산출 요청 및 상태 관리. Spring Boot가 REQUESTED로 생성, Python 배치가 처리';
 
 -- ------------------------------------------------------------
--- 4. S 산출 요청 (은행원 개별 요청)
+-- 4. S등급 산출 결과 리포트
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS s_calculation_request (
-    request_id          BIGINT          NOT NULL AUTO_INCREMENT,
-    target_user_id      BIGINT          NOT NULL COMMENT '산출 대상 고객 ID',
-    s_evaluation_id     BIGINT          NULL COMMENT '산출 결과 ID (완료 전 NULL)',
-    status              ENUM('REQUESTED', 'IN_PROGRESS', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'REQUESTED' COMMENT '요청 처리 상태',
-    retry_count         INT             NOT NULL DEFAULT 0 COMMENT '재시도 횟수 (최대 3회 초과 시 FAILED)',
-    error_message       TEXT            NULL COMMENT '최종 실패 시 에러 메시지',
-    requested_at        DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '요청 일시',
-    completed_at        DATETIME        NULL COMMENT '산출 완료 일시',
-
-    PRIMARY KEY (request_id),
-    INDEX idx_s_calc_request_status (status),
-    INDEX idx_s_calc_request_target_user (target_user_id),
-    CONSTRAINT fk_s_calc_request_evaluation
-        FOREIGN KEY (s_evaluation_id) REFERENCES s_evaluation_history (s_evaluation_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='은행원 개별 S등급 산출 요청. 배치와 별도로 즉시 산출 트리거';
-
--- ------------------------------------------------------------
--- 5. SHAP 설명
--- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS shap_explanation (
-    result_id               BIGINT          NOT NULL AUTO_INCREMENT,
-    evaluation_id           BIGINT          NOT NULL COMMENT '산출 ID',
+CREATE TABLE IF NOT EXISTS s_grade_report (
+    s_grade_id              BIGINT          NOT NULL COMMENT '산출 ID (PK, FK → s_grade_history)',
     user_id                 BIGINT          NOT NULL COMMENT '사용자 ID',
+    feature_id              BIGINT          NOT NULL COMMENT '피처 ID (FK → s_grade_feature)',
     s_grade                 VARCHAR(10)     NOT NULL COMMENT '현재 등급 (예: S6)',
     target_grade            VARCHAR(10)     NOT NULL COMMENT '목표 등급 (예: S5). S1이면 S1',
     strength_keywords       JSON            NOT NULL COMMENT '강점 키워드 목록 (Array)',
     improvement_keywords    JSON            NOT NULL COMMENT '개선점 키워드 목록 (Array). S1이면 []',
     strength_details        JSON            NOT NULL COMMENT '강점 상세 점수 Map (Key-Value)',
     improvement_details     JSON            NOT NULL COMMENT '개선점 상세 점수 Map (Key-Value). S1이면 {}',
-    advice                  TEXT            NULL COMMENT 'AI 생성 조언. S1이면 강점 유지 조언만 포함',
+    user_advice             TEXT            NULL COMMENT '유저 전용 AI 생성 조언. S1이면 강점 유지 조언만 포함',
+    admin_advice            TEXT            NULL COMMENT '은행원 전용 AI 생성 분석 텍스트',
     created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '데이터 생성 일시',
+    updated_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '데이터 수정 일시',
 
-    PRIMARY KEY (result_id),
-    INDEX idx_shap_explanation_evaluation (evaluation_id),
-    INDEX idx_shap_explanation_user (user_id),
-    CONSTRAINT fk_shap_evaluation
-        FOREIGN KEY (evaluation_id) REFERENCES s_evaluation_history (s_evaluation_id)
+    PRIMARY KEY (s_grade_id),
+    INDEX idx_s_grade_report_user (user_id),
+    INDEX idx_s_grade_report_feature (feature_id),
+    CONSTRAINT fk_s_grade_report_history
+        FOREIGN KEY (s_grade_id) REFERENCES s_grade_history (s_grade_id),
+    CONSTRAINT fk_s_grade_report_feature
+        FOREIGN KEY (feature_id) REFERENCES s_grade_feature (feature_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='SHAP 기반 XAI 결과. target_grade: 현재 등급 바로 위. S1이면 개선점 미생성';
-
--- ------------------------------------------------------------
--- 6. s_evaluation_history.result_id FK 추가 (순환 참조 방지를 위해 후순위 설정)
--- ------------------------------------------------------------
-ALTER TABLE s_evaluation_history
-    ADD CONSTRAINT fk_s_evaluation_result
-        FOREIGN KEY (result_id) REFERENCES shap_explanation (result_id);
+  COMMENT='SHAP 기반 XAI 결과 + LLM 조언. s_grade_history와 1:1 관계';
