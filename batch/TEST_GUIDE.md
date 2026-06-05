@@ -32,7 +32,7 @@ mysql -h $DB_HOST -u $DB_USERNAME -p sofit < database/ddl/V1__create_s_grade_tab
 
 ### 시나리오 1: 일일 배치 (DAILY) 테스트
 
-**목적**: `s_calculation_request`에 REQUESTED 상태인 건만 처리되는지 확인
+**목적**: `s_grade_history`에 REQUESTED 상태인 건만 처리되는지 확인
 
 #### Step 1: 기존 데이터 초기화
 ```bash
@@ -51,28 +51,23 @@ python -m batch.run_batch --cycle daily
 
 #### Step 4: 결과 확인
 ```sql
--- 1. s_calculation_request 상태 확인 (COMPLETED여야 함)
-SELECT request_id, target_user_id, status, retry_count, completed_at
-FROM s_calculation_request;
+-- 1. s_grade_history 상태 확인 (COMPLETED여야 함)
+SELECT s_grade_id, user_id, status, evaluated_at
+FROM s_grade_history;
 
--- 2. s_evaluation_history 확인 (is_latest=1인 레코드 생성)
-SELECT s_evaluation_id, user_id, grade, score, is_latest, status
-FROM s_evaluation_history;
+-- 2. s_grade_report 확인 (등급 + 강점/개선 키워드 생성)
+SELECT s_grade_id, user_id, s_grade, target_grade,
+       strength_keywords, improvement_keywords, user_advice
+FROM s_grade_report;
 
--- 3. shap_explanation 확인 (강점/개선 키워드 생성)
-SELECT result_id, user_id, s_grade, target_grade,
-       strength_keywords, improvement_keywords, advice
-FROM shap_explanation;
-
--- 4. batch_execution_history 확인
+-- 3. batch_execution_history 확인
 SELECT execution_id, execution_cycle, status, total_count, success_count, fail_count
 FROM batch_execution_history;
 ```
 
 #### 기대 결과
-- `s_calculation_request`: 2건 모두 `COMPLETED`
-- `s_evaluation_history`: 2건 생성, `is_latest=1`
-- `shap_explanation`: 2건 생성, 키워드/상세 포함
+- `s_grade_history`: 2건 모두 `COMPLETED`, `evaluated_at` 기록됨
+- `s_grade_report`: 2건 생성, 키워드/상세/user_advice/admin_advice 포함
 - `batch_execution_history`: `DAILY`, `COMPLETED`, success_count=2
 
 ---
@@ -99,29 +94,34 @@ python -m batch.run_batch --cycle monthly
 #### Step 4: 결과 확인
 ```sql
 -- 1. 전체 사용자 등급 갱신 확인
-SELECT s_evaluation_id, user_id, grade, score, is_latest
-FROM s_evaluation_history
-WHERE is_latest = 1;
+SELECT s_grade_id, user_id, status, evaluated_at
+FROM s_grade_history
+WHERE status = 'COMPLETED';
 
--- 2. REQUESTED 건이 함께 COMPLETED 처리되었는지 확인
-SELECT request_id, target_user_id, status, s_evaluation_id
-FROM s_calculation_request;
+-- 2. s_grade_report 결과 확인
+SELECT s_grade_id, user_id, s_grade, target_grade
+FROM s_grade_report;
 
--- 3. batch_execution_history 확인
+-- 3. REQUESTED 건이 함께 COMPLETED 처리되었는지 확인
+SELECT s_grade_id, user_id, status
+FROM s_grade_history
+WHERE user_id = 1001;
+
+-- 4. batch_execution_history 확인
 SELECT execution_id, execution_cycle, status, total_count, success_count
 FROM batch_execution_history;
 ```
 
 #### 기대 결과
-- `s_evaluation_history`: 3건 생성 (전체 사용자), 모두 `is_latest=1`
-- `s_calculation_request`: user_id=1001의 REQUESTED 건이 `COMPLETED`로 변경
+- `s_grade_history`: 3건 이상 `COMPLETED` (전체 사용자 + user_id=1001의 기존 REQUESTED 건 흡수)
+- `s_grade_report`: 3건 생성 (전체 사용자)
 - `batch_execution_history`: `MONTHLY`, `COMPLETED`, success_count=3
 
 ---
 
 ### 시나리오 3: 재시도 전략 테스트
 
-**목적**: 실패 건이 REQUESTED로 롤백되고, 3회 초과 시 FAILED 처리되는지 확인
+**목적**: 배치 내부 재시도 로직 동작 확인 (최대 3회, 실패 시 FAILED)
 
 #### Step 1: 기존 데이터 초기화
 ```bash
@@ -140,16 +140,19 @@ python -m batch.run_batch --cycle daily
 
 #### Step 4: 결과 확인
 ```sql
--- IN_PROGRESS 고아 건이 복구되었는지 확인
-SELECT request_id, status, retry_count, error_message
-FROM s_calculation_request
-ORDER BY request_id;
+-- 각 건의 상태 확인
+SELECT s_grade_id, user_id, status, evaluated_at
+FROM s_grade_history
+ORDER BY s_grade_id;
 ```
 
 #### 기대 결과
-- request_id=1: `COMPLETED` (정상 처리)
-- request_id=2: `REQUESTED`, retry_count=1 (고아 건 복구됨, 다음 배치에서 재시도)
-- request_id=3: `FAILED`, retry_count=3 (최대 재시도 초과)
+- s_grade_id=1: `COMPLETED` (정상 처리)
+- s_grade_id=2: `COMPLETED` (정상 처리)
+- s_grade_id=3: `COMPLETED` (정상 처리)
+
+> 참고: 재시도는 배치 내부 메모리에서 관리되며, 모델/DB 오류 시에만 재시도 발생.
+> 테스트 데이터가 정상이면 모두 성공합니다. 실패 테스트를 하려면 피처 데이터를 의도적으로 손상시키세요.
 
 ---
 
