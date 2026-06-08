@@ -1,10 +1,13 @@
 -- ============================================================
 -- 일일 배치 (DAILY) 테스트용 데이터
--- 시나리오: 2명의 고객이 대출 신청하여 REQUESTED 상태
+-- 시나리오: 3명의 고객이 대출 신청하여 REQUESTED 상태
+--   - user_id=1001: 성장세 매장 (높은 매출증가율, 온라인 활발)
+--   - user_id=1002: 전통시장 오프라인 매장 (낮은 온라인 활동, 안정적)
+--   - user_id=1003: 온라인 중심 신규 매장 (업력 짧지만 온라인 강점)
 -- ============================================================
 
--- 1. s_input_feature: 2명의 사용자 피처 데이터
-INSERT INTO s_input_feature (
+-- 1. s_grade_feature: 3명의 사용자 피처 데이터
+INSERT INTO s_grade_feature (
     feature_id, biz_data_id, user_id,
     business_age_months, quarterly_revenue_growth_rate, annual_revenue_growth_rate, revenue_vs_industry_avg_ratio,
     avg_monthly_transaction_3m, avg_monthly_transaction_6m, avg_monthly_transaction_12m,
@@ -16,7 +19,7 @@ INSERT INTO s_input_feature (
     positive_review_ratio, has_online_reservation, owner_experience_years, employee_count, has_sns, created_at
 ) VALUES
 -- user_id=1001: 성장세 매장
-(1, 101, 1001,
+(1, 1, 1,
  24, 12.50, 8.30, 1.20,
  15000000.00, 14200000.00, 13500000.00,
  1, 5, 78.50,
@@ -26,7 +29,7 @@ INSERT INTO s_input_feature (
  'GROWING', 'GROWING', 4.8, 120, 4.5, 350,
  92.50, 1, 5, 3, 1, NOW()),
 -- user_id=1002: 전통시장 오프라인 매장
-(2, 102, 1002,
+(2, 2, 2,
  120, -2.10, 1.50, 0.85,
  8500000.00, 9000000.00, 8800000.00,
  3, 15, 12.00,
@@ -34,11 +37,22 @@ INSERT INTO s_input_feature (
  -0.02, 0.01, 0.01,
  30.00, 0, 40.00, 1,
  'STABLE', 'STABLE', 4.2, 15, 0.0, 0,
- 80.00, 0, 15, 1, 0, NOW());
+ 80.00, 0, 15, 1, 0, NOW()),
+-- user_id=1003: 온라인 중심 신규 매장
+(3, 3, 3,
+ 6, 25.00, 0.00, 0.60,
+ 5000000.00, 4500000.00, 0.00,
+ 0, 2, 92.00,
+ 12.50, 0.00, 0.00,
+ 4.17, 0.00, 0.00,
+ 95.00, 1, 80.00, 0,
+ 'GROWING', 'GROWING', 4.9, 85, 4.7, 520,
+ 95.00, 1, 1, 2, 1, NOW());
 
--- 2. s_calculation_request: 2건 REQUESTED
-INSERT INTO s_calculation_request (
-    request_id, target_user_id, s_evaluation_id, status, retry_count, error_message, requested_at, completed_at
+-- 2. s_grade_history: 3건 REQUESTED (Spring Boot가 미리 생성)
+INSERT INTO s_grade_history (
+    s_grade_id, user_id, feature_id, batch_execution_id, status, requested_at, evaluated_at
 ) VALUES
-(1, 1001, NULL, 'REQUESTED', 0, NULL, NOW(), NULL),
-(2, 1002, NULL, 'REQUESTED', 0, NULL, DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL);
+(1, 1, 1, NULL, 'REQUESTED', NOW(), NULL),
+(2, 2, 2, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 1 HOUR), NULL),
+(3, 3, 3, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 2 HOUR), NULL);

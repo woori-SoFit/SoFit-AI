@@ -6,10 +6,9 @@
 
 SET FOREIGN_KEY_CHECKS = 0;
 
-TRUNCATE TABLE shap_explanation;
-TRUNCATE TABLE s_calculation_request;
-TRUNCATE TABLE s_evaluation_history;
+TRUNCATE TABLE s_grade_report;
+TRUNCATE TABLE s_grade_history;
 TRUNCATE TABLE batch_execution_history;
-TRUNCATE TABLE s_input_feature;
+TRUNCATE TABLE s_grade_feature;
 
 SET FOREIGN_KEY_CHECKS = 1;

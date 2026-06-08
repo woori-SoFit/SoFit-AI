@@ -1,15 +1,17 @@
 -- ============================================================
 -- 재시도 전략 테스트용 데이터
 -- 시나리오:
---   - request_id=1: 정상 REQUESTED (처리 성공 예상)
---   - request_id=2: IN_PROGRESS 고아 건 (이전 배치에서 비정상 종료, retry_count=0)
---                   → 배치 시작 시 REQUESTED로 복구되어 재시도
---   - request_id=3: IN_PROGRESS 고아 건 (retry_count=2, 이미 2회 실패)
---                   → 배치 시작 시 retry_count=3이 되어 FAILED 처리
+--   - s_grade_id=1: 정상 REQUESTED (처리 성공 예상)
+--   - s_grade_id=2: REQUESTED (처리 중 실패 시 배치 내부에서 재시도)
+--   - s_grade_id=3: REQUESTED (실패 예상 - 피처 데이터가 부적절할 경우)
+--
+-- [재시도 전략]
+-- retry_count는 DB 컬럼이 아닌 배치 내부 메모리에서 관리.
+-- 최대 3회 재시도 후 실패 시 s_grade_history.status를 FAILED로 변경.
 -- ============================================================
 
--- 1. s_input_feature: 3명의 사용자 피처 데이터
-INSERT INTO s_input_feature (
+-- 1. s_grade_feature: 3명의 사용자 피처 데이터
+INSERT INTO s_grade_feature (
     feature_id, biz_data_id, user_id,
     business_age_months, quarterly_revenue_growth_rate, annual_revenue_growth_rate, revenue_vs_industry_avg_ratio,
     avg_monthly_transaction_3m, avg_monthly_transaction_6m, avg_monthly_transaction_12m,
@@ -48,13 +50,10 @@ INSERT INTO s_input_feature (
  'GROWING', 'GROWING', 4.9, 85, 4.7, 520,
  95.00, 1, 1, 2, 1, NOW());
 
--- 2. s_calculation_request: 다양한 상태의 요청
-INSERT INTO s_calculation_request (
-    request_id, target_user_id, s_evaluation_id, status, retry_count, error_message, requested_at, completed_at
+-- 2. s_grade_history: 3건 모두 REQUESTED (재시도는 배치 내부에서 관리)
+INSERT INTO s_grade_history (
+    s_grade_id, user_id, feature_id, batch_execution_id, status, requested_at, evaluated_at
 ) VALUES
--- 정상 REQUESTED (처리 성공 예상)
-(1, 1001, NULL, 'REQUESTED', 0, NULL, NOW(), NULL),
--- IN_PROGRESS 고아 건 (retry_count=0 → 복구 후 retry_count=1, REQUESTED로 변경)
-(2, 1002, NULL, 'IN_PROGRESS', 0, '이전 배치에서 비정상 종료', DATE_SUB(NOW(), INTERVAL 2 HOUR), NULL),
--- IN_PROGRESS 고아 건 (retry_count=2 → 복구 시 retry_count=3 → FAILED 처리)
-(3, 1003, NULL, 'IN_PROGRESS', 2, '2회 연속 실패', DATE_SUB(NOW(), INTERVAL 3 HOUR), NULL);
+(1, 1001, 1, NULL, 'REQUESTED', NOW(), NULL),
+(2, 1002, 2, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 2 HOUR), NULL),
+(3, 1003, 3, NULL, 'REQUESTED', DATE_SUB(NOW(), INTERVAL 3 HOUR), NULL);
