@@ -640,20 +640,18 @@ async def run_batch(
 async def process_single_user(
     model: Any,
     row: dict[str, Any],
+    s_grade_id: int,
     batch_execution_id: int,
     conn: Any,
 ) -> None:
     """
     월별 배치용: 단일 사용자 처리 (추론 → SHAP → 조언 → DB 적재).
-    s_grade_history에 REQUESTED 레코드를 새로 INSERT한 뒤, 일일 배치와 동일한 흐름으로 처리.
+    s_grade_id는 호출자(run_monthly_batch)가 재시도 루프 바깥에서 생성하여 전달한다.
     """
     user_id = row["user_id"]
     feature_id = row["feature_id"]
 
-    logger.info("월별 처리 시작: user_id=%d", user_id)
-
-    # s_grade_history 신규 생성 (REQUESTED)
-    s_grade_id = insert_grade_history(conn, user_id, feature_id, batch_execution_id)
+    logger.info("월별 처리 시작: user_id=%d, s_grade_id=%d", user_id, s_grade_id)
 
     # 상태 → CALCULATING
     update_grade_history_status(conn, s_grade_id, STATUS_CALCULATING)
@@ -767,12 +765,18 @@ async def run_monthly_batch(
 
         for row in all_features:
             user_id = row["user_id"]
+            feature_id = row["feature_id"]
+
+            # s_grade_history 신규 생성 — 재시도 루프 바깥에서 1회만 수행
+            s_grade_id = insert_grade_history(conn, user_id, feature_id, batch_execution_id)
+            conn.commit()
+
             retry_count = 0
             success = False
 
             while retry_count < MAX_RETRY_COUNT and not success:
                 try:
-                    await process_single_user(model, row, batch_execution_id, conn)
+                    await process_single_user(model, row, s_grade_id, batch_execution_id, conn)
                     success = True
                     success_count += 1
                 except Exception as e:
@@ -787,8 +791,10 @@ async def run_monthly_batch(
                     if retry_count >= MAX_RETRY_COUNT:
                         fail_count += 1
                         last_error = str(e)
+                        fail_grade_history(conn, s_grade_id)
+                        conn.commit()
                         logger.warning(
-                            "최종 실패: user_id=%d (%d회 재시도 후 실패)",
+                            "최종 실패: user_id=%d (%d회 재시도 후 FAILED)",
                             user_id, MAX_RETRY_COUNT,
                         )
 
