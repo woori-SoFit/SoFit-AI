@@ -2,25 +2,18 @@
 S등급 산출 배치 실행 엔트리포인트.
 
 사용법:
-    # 일일 배치 — 자동 (crontab)
-    python -m batch.run_batch --cycle daily
-
     # 월별 배치 — 자동 (crontab)
-    python -m batch.run_batch --cycle monthly
-
-    # 수동 트리거 (은행원이 관리자 페이지에서 실행)
-    python -m batch.run_batch --cycle daily --type manual --triggered-by 2001
-    python -m batch.run_batch --cycle monthly --type manual --triggered-by 2001
-
-    # 기본값: daily, auto
     python -m batch.run_batch
 
-스케줄링 (crontab 예시):
-    # 매일 23:40 — 단, 매월 1일은 제외 (월별 배치가 대신 처리)
-    40 23 2-31 * * cd /app/SoFit-AI && python -m batch.run_batch --cycle daily
+    # 수동 트리거 (은행원이 관리자 페이지에서 실행)
+    python -m batch.run_batch --type manual --triggered-by 2001
 
-    # 매월 1일 23:40 — 월별 배치 (전체 회원 + REQUESTED 건 포함)
-    40 23 1 * * cd /app/SoFit-AI && python -m batch.run_batch --cycle monthly
+스케줄링 (crontab 예시):
+    # 매월 1일 23:40 — 월별 배치 (전체 회원 등급 갱신)
+    40 23 1 * * cd /app/SoFit-AI && python -m batch.run_batch
+
+참고:
+    - 건별 S등급 산출은 FastAPI 서빙 서버에서 처리 (일일 배치 제거됨)
 """
 
 import argparse
@@ -28,7 +21,7 @@ import asyncio
 import logging
 import sys
 
-from batch.pipeline import run_batch, run_monthly_batch
+from batch.pipeline import run_monthly_batch
 
 # 로깅 설정
 logging.basicConfig(
@@ -41,13 +34,7 @@ logging.basicConfig(
 
 def main() -> None:
     """배치 실행."""
-    parser = argparse.ArgumentParser(description="SoFit S등급 산출 배치")
-    parser.add_argument(
-        "--cycle",
-        choices=["daily", "monthly"],
-        default="daily",
-        help="배치 주기: daily(일일, REQUESTED 건만) / monthly(월별, 전체 사용자)",
-    )
+    parser = argparse.ArgumentParser(description="SoFit S등급 산출 월별 배치")
     parser.add_argument(
         "--type",
         choices=["auto", "manual"],
@@ -69,10 +56,7 @@ def main() -> None:
     execution_type = args.type.upper()  # AUTO / MANUAL
     triggered_by = args.triggered_by
 
-    if args.cycle == "monthly":
-        asyncio.run(run_monthly_batch(execution_type=execution_type, triggered_by=triggered_by))
-    else:
-        asyncio.run(run_batch(execution_type=execution_type, triggered_by=triggered_by))
+    asyncio.run(run_monthly_batch(execution_type=execution_type, triggered_by=triggered_by))
 
 
 if __name__ == "__main__":

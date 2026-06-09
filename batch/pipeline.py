@@ -1,13 +1,16 @@
 """
 S등급 산출 배치 파이프라인.
 
-처리 흐름:
-1. s_grade_history에서 REQUESTED 상태 조회 (일일) / 전체 사용자 피처 조회 (월별)
+처리 흐름 (월별 배치):
+1. 전체 사용자의 최신 s_grade_feature 데이터 조회 (biz_data_id → my_biz_data.business_number 기준)
 2. 해당 사용자의 s_grade_feature 데이터로 LightGBM 모델 추론
 3. SHAP 기반 XAI 설명 생성
 4. Gemini LLM으로 자연어 조언 생성 (user_advice + admin_advice)
 5. 결과를 s_grade_report에 적재
 6. s_grade_history 상태를 COMPLETED로 갱신 + evaluated_at 기록
+
+[건별 산출]
+- 건별 S등급 산출은 FastAPI 서빙 서버에서 처리 (일일 배치 제거됨)
 
 [재시도 전략]
 - 배치 내부 메모리에서 최대 3회 즉시 재시도
@@ -41,7 +44,6 @@ from batch.db import (
     complete_requested_for_user,
     fail_grade_history,
     fetch_all_latest_features,
-    fetch_requested_grades,
     get_connection,
     insert_batch_execution,
     insert_grade_history,
@@ -471,170 +473,6 @@ def _build_admin_prompt(
 4. 한국어로 작성
 5. 사업자 성장 가능성에 대한 종합 판단 포함
 """
-
-
-async def process_single_request(
-    model: Any,
-    row: dict[str, Any],
-    batch_execution_id: int,
-    conn: Any,
-) -> None:
-    """
-    일일 배치: 단일 산출 요청 처리 (추론 → SHAP → 조언 → DB 적재).
-    s_grade_history에 Spring Boot가 미리 s_feature_id를 채워놓은 상태.
-    """
-    s_grade_id = row["s_grade_id"]
-    user_id = row["user_id"]
-    feature_id = row["feature_id"]
-
-    logger.info("처리 시작: s_grade_id=%d, user_id=%d", s_grade_id, user_id)
-
-    # 1. 요청 상태 → CALCULATING + batch_execution_id 기록
-    update_grade_history_status(conn, s_grade_id, STATUS_CALCULATING, batch_execution_id)
-    conn.commit()
-
-    # 2. 피처 준비 및 모델 추론
-    input_df = prepare_features(row)
-    s_grade, score = predict_grade(model, input_df)
-    target_grade = get_target_grade(s_grade)
-
-    logger.info(
-        "추론 완료: user_id=%d, grade=%s, score=%.4f, target=%s",
-        user_id, s_grade.value, score, target_grade.value,
-    )
-
-    # 3. SHAP 계산
-    target_class = target_grade.to_index()
-    strengths, improvements = compute_shap(model, input_df, target_class)
-
-    # 4. 키워드 및 상세 추출
-    strength_keywords, improvement_keywords = extract_keywords(strengths, improvements)
-    strength_details, improvement_details = extract_details(strengths, improvements)
-
-    # S1인 경우 개선점 비우기
-    if s_grade == SGrade.S1:
-        improvement_keywords = []
-        improvement_details = {}
-
-    # 5. LLM 조언 생성 (유저용 + 은행원용)
-    user_advice = await generate_user_advice(
-        s_grade.value, target_grade.value, strengths, improvements
-    )
-    admin_advice = await generate_admin_advice(
-        s_grade.value, target_grade.value, strengths, improvements
-    )
-
-    # 6. DB 적재 (트랜잭션)
-    # 6-1. s_grade_report 삽입
-    insert_grade_report(
-        conn,
-        s_grade_id=s_grade_id,
-        user_id=user_id,
-        feature_id=feature_id,
-        s_grade=s_grade.value,
-        target_grade=target_grade.value,
-        strength_keywords=json.dumps(strength_keywords, ensure_ascii=False),
-        improvement_keywords=json.dumps(improvement_keywords, ensure_ascii=False),
-        strength_details=json.dumps(strength_details, ensure_ascii=False),
-        improvement_details=json.dumps(improvement_details, ensure_ascii=False),
-        user_advice=user_advice,
-        admin_advice=admin_advice,
-    )
-
-    # 6-2. s_grade_history → COMPLETED + evaluated_at 기록
-    complete_grade_history(conn, s_grade_id)
-
-    # 건별 커밋
-    conn.commit()
-
-    logger.info(
-        "처리 완료: s_grade_id=%d, user_id=%d, grade=%s",
-        s_grade_id, user_id, s_grade.value,
-    )
-
-
-async def run_batch(
-    execution_type: str = "AUTO",
-    triggered_by: int | None = None,
-) -> None:
-    """일일 배치 메인 실행 함수 (DAILY)."""
-    logger.info("=" * 60)
-    logger.info("S등급 산출 일일 배치 시작 (DAILY, type=%s)", execution_type)
-    logger.info("=" * 60)
-
-    # 모델 로드
-    model = load_model()
-
-    with get_connection() as conn:
-        # 고아 건 복구 (이전 배치 비정상 종료 대응)
-        recover_orphaned_calculating(conn)
-        conn.commit()
-
-        # REQUESTED 상태 조회
-        requests = fetch_requested_grades(conn)
-
-        if not requests:
-            logger.info("처리할 요청이 없습니다. 배치 종료.")
-            return
-
-        # 배치 실행 이력 생성
-        batch_execution_id = insert_batch_execution(
-            conn,
-            execution_type=execution_type,
-            execution_cycle="DAILY",
-            total_count=len(requests),
-            triggered_by=triggered_by,
-        )
-        conn.commit()
-        logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(requests))
-
-        success_count = 0
-        fail_count = 0
-        last_error = None
-
-        for row in requests:
-            s_grade_id = row["s_grade_id"]
-            retry_count = 0
-            success = False
-
-            while retry_count < MAX_RETRY_COUNT and not success:
-                try:
-                    await process_single_request(model, row, batch_execution_id, conn)
-                    success = True
-                    success_count += 1
-                except Exception as e:
-                    retry_count += 1
-                    conn.rollback()
-                    logger.error(
-                        "처리 실패 (시도 %d/%d): s_grade_id=%d, error=%s",
-                        retry_count, MAX_RETRY_COUNT, s_grade_id, str(e),
-                        exc_info=True,
-                    )
-
-                    if retry_count >= MAX_RETRY_COUNT:
-                        # 최대 재시도 초과 → FAILED 처리
-                        fail_count += 1
-                        last_error = str(e)
-                        fail_grade_history(conn, s_grade_id)
-                        conn.commit()
-                        logger.warning(
-                            "최종 실패: s_grade_id=%d (%d회 재시도 후 FAILED)",
-                            s_grade_id, MAX_RETRY_COUNT,
-                        )
-
-        # 배치 실행 이력 업데이트
-        final_status = STATUS_COMPLETED if fail_count == 0 else STATUS_FAILED
-        update_batch_execution(
-            conn, batch_execution_id, final_status, success_count, fail_count, last_error
-        )
-        conn.commit()
-
-        logger.info("-" * 60)
-        logger.info(
-            "일일 배치 완료: 성공=%d, 실패=%d, 상태=%s",
-            success_count, fail_count, final_status,
-        )
-        logger.info("=" * 60)
 
 
 async def process_single_user(

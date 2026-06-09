@@ -5,7 +5,7 @@
 -- 1번째 행: 일반적인 성장세 매장 (분기/연간 매출 증가, 온라인 활성화 양호)
 -- 2번째 행: 전통시장 내 위치한 오프라인 중심 매장 (배달 없음, 업력 김)
 INSERT INTO s_grade_feature (
-    feature_id, biz_data_id, user_id,
+    feature_id, biz_data_id,
     business_age_months, quarterly_revenue_growth_rate, annual_revenue_growth_rate, revenue_vs_industry_avg_ratio,
     avg_monthly_transaction_3m, avg_monthly_transaction_6m, avg_monthly_transaction_12m,
     days_since_last_transaction, max_inactive_days, online_platform_activity_index,
@@ -16,7 +16,7 @@ INSERT INTO s_grade_feature (
     positive_review_ratio, has_online_reservation, owner_experience_years, employee_count, has_sns, created_at
 ) VALUES
 (
-    1, 101, 1001,
+    1, 101,
     24, 12.50, 8.30, 1.20,
     15000000.00, 14200000.00, 13500000.00,
     1, 5, 78.50,
@@ -27,7 +27,7 @@ INSERT INTO s_grade_feature (
     92.50, true, 5, 3, true, NOW()
 ),
 (
-    2, 102, 1002,
+    2, 102,
     120, -2.10, 1.50, 0.85,
     8500000.00, 9000000.00, 8800000.00,
     3, 15, 12.00,

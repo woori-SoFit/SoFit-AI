@@ -64,42 +64,30 @@ def get_connection() -> Generator[pymysql.connections.Connection, None, None]:
 
 def fetch_requested_grades(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
     """
-    일일 배치: status='REQUESTED'인 s_grade_history 목록을 조회.
-    Spring Boot가 미리 채워놓은 s_feature_id를 이용하여 s_grade_feature과 JOIN.
+    [DEPRECATED - 일일 배치 제거됨. 호환용으로 유지하지 않음]
+    건별 S등급 산출은 FastAPI 서빙으로 이관됨.
     """
-    sql = """
-        SELECT
-            h.s_grade_id,
-            h.user_id,
-            h.feature_id,
-            h.requested_at,
-            f.*
-        FROM s_grade_history h
-        JOIN s_grade_feature f ON f.feature_id = h.feature_id
-        WHERE h.status = %s
-        ORDER BY h.requested_at ASC
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(sql, (STATUS_REQUESTED,))
-        results = cursor.fetchall()
-    logger.info("REQUESTED 상태 S등급 산출 요청 %d건 조회", len(results))
-    return results
+    raise NotImplementedError("일일 배치는 제거되었습니다. 건별 산출은 FastAPI 서빙을 사용하세요.")
 
 
 def fetch_all_latest_features(conn: pymysql.connections.Connection) -> list[dict[str, Any]]:
     """
     월별 배치용: 전체 사용자의 최신 s_grade_feature 레코드를 조회.
-    사용자별 created_at이 가장 최근인 레코드 1건만 반환.
+    경로: s_grade_feature.biz_data_id → my_biz_data.business_number → business_profile.user_id
+    사용자(business_number)별 created_at이 가장 최근인 레코드 1건만 반환.
     """
     sql = """
-        SELECT f.*
+        SELECT f.*, m.business_number, bp.user_id
         FROM s_grade_feature f
+        INNER JOIN my_biz_data m ON f.biz_data_id = m.biz_data_id
+        INNER JOIN business_profile bp ON m.business_number = bp.business_number
         INNER JOIN (
-            SELECT user_id, MAX(created_at) AS max_created_at
-            FROM s_grade_feature
-            GROUP BY user_id
-        ) latest ON f.user_id = latest.user_id AND f.created_at = latest.max_created_at
-        ORDER BY f.user_id ASC
+            SELECT m2.business_number, MAX(f2.created_at) AS max_created_at
+            FROM s_grade_feature f2
+            INNER JOIN my_biz_data m2 ON f2.biz_data_id = m2.biz_data_id
+            GROUP BY m2.business_number
+        ) latest ON m.business_number = latest.business_number AND f.created_at = latest.max_created_at
+        ORDER BY m.business_number ASC
     """
     with conn.cursor() as cursor:
         cursor.execute(sql)
