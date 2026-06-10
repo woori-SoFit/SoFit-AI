@@ -21,7 +21,7 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 sh """
-                    docker build -t $REGISTRY/$IMAGE_NAME:$BRANCH_TAG -f serving/Dockerfile .
+                    docker build --no-cache -t $REGISTRY/$IMAGE_NAME:$BRANCH_TAG -f serving/Dockerfile .
                     docker push $REGISTRY/$IMAGE_NAME:$BRANCH_TAG
                 """
             }
