@@ -42,7 +42,7 @@ pipeline {
     }
     post {
         always {
-            sh 'docker image prune -f'  // 매 빌드 후 찌꺼기 자동 정리
+            sh 'docker image prune -a -f --filter "until=72h"'  // 매 빌드 후 찌꺼기 자동 정리
         }
         success { echo "refactoring 브랜치 빌드/배포 성공" }
         failure { echo "refactoring 브랜치 빌드/배포 실패" }
