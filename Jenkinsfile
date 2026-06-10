@@ -2,7 +2,7 @@ pipeline {
     agent any
     environment {
         REGISTRY   = '172.21.33.225:5000'
-        APP_SERVER = '172.21.33.238'
+        APP_SERVER = '172.21.33.249'
         IMAGE_NAME = 'sofit-ai'
         BRANCH_TAG = 'refactoring'
     }
