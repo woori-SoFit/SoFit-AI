@@ -51,7 +51,7 @@ class Explainer:
 
     def explain(
         self,
-        input_array: np.ndarray,
+        input_array: np.ndarray | pd.DataFrame,
         feature_names: list[str],
         feature_values: dict[str, Any],
         predicted_class: int | None = None,
@@ -60,7 +60,7 @@ class Explainer:
         입력 배열에 대한 SHAP 값을 계산하고 긍정/부정 기여 변수 Top5를 반환.
 
         Args:
-            input_array: 모델 입력 배열 (shape: [1, n_features])
+            input_array: 모델 입력 배열 (shape: [1, n_features]) 또는 DataFrame
             feature_names: 피처명 목록
             feature_values: 원본 피처 값 딕셔너리
             predicted_class: 목표 클래스 인덱스 (0~9).
@@ -79,23 +79,23 @@ class Explainer:
         if not self.is_ready:
             raise RuntimeError("Explainer가 초기화되지 않았습니다.")
 
-        # DataFrame으로 변환하여 피처명 보존 (SHAP 호환성)
-        input_df = pd.DataFrame(input_array, columns=feature_names)
+        # DataFrame이 아닌 경우 DataFrame으로 변환
+        if isinstance(input_array, pd.DataFrame):
+            input_df = input_array.copy()
+        else:
+            input_df = pd.DataFrame(input_array, columns=feature_names)
 
-        # ── [추가된 가드레일 로직] 수치형 컬럼들의 object 타입 깨짐 방지 ──
-        # input_array가 object 배열일 경우 모든 컬럼이 object 타입이 되므로 수치형 타입을 복원합니다.
-        for col in input_df.columns:
-            val = feature_values.get(col)
-            if isinstance(val, (int, np.integer)):
-                input_df[col] = input_df[col].astype(int)
-            elif isinstance(val, (float, np.floating)):
-                input_df[col] = input_df[col].astype(float)
-            elif isinstance(val, bool):
-                input_df[col] = input_df[col].astype(bool)
-        # ─────────────────────────────────────────────────────────────────
+            # ── [추가된 가드레일 로직] 수치형 컬럼들의 object 타입 깨짐 방지 ──
+            for col in input_df.columns:
+                val = feature_values.get(col)
+                if isinstance(val, (int, np.integer)):
+                    input_df[col] = input_df[col].astype(int)
+                elif isinstance(val, (float, np.floating)):
+                    input_df[col] = input_df[col].astype(float)
+                elif isinstance(val, bool):
+                    input_df[col] = input_df[col].astype(bool)
 
         # LightGBM 학습 시 category 타입이었던 컬럼을 복원
-        # (학습 시 categorical_feature로 지정된 컬럼과 dtype이 일치해야 함)
         categorical_cols = ["commercial_trend", "industry_trend"]
         for col in categorical_cols:
             if col in input_df.columns:

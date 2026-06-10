@@ -8,7 +8,7 @@
 
 -- 1. s_grade_feature: 3명의 사용자 피처 데이터
 INSERT INTO s_grade_feature (
-    feature_id, biz_data_id, user_id,
+    feature_id, biz_data_id,
     business_age_months, quarterly_revenue_growth_rate, annual_revenue_growth_rate, revenue_vs_industry_avg_ratio,
     avg_monthly_transaction_3m, avg_monthly_transaction_6m, avg_monthly_transaction_12m,
     days_since_last_transaction, max_inactive_days, online_platform_activity_index,
@@ -19,7 +19,7 @@ INSERT INTO s_grade_feature (
     positive_review_ratio, has_online_reservation, owner_experience_years, employee_count, has_sns, created_at
 ) VALUES
 -- user_id=1001: 성장세 매장 (기존 REQUESTED 요청 있음)
-(1, 1, 1,
+(1, 1,
  24, 12.50, 8.30, 1.20,
  15000000.00, 14200000.00, 13500000.00,
  1, 5, 78.50,
@@ -29,7 +29,7 @@ INSERT INTO s_grade_feature (
  'GROWING', 'GROWING', 4.8, 120, 4.5, 350,
  92.50, 1, 5, 3, 1, NOW()),
 -- user_id=1002: 전통시장 오프라인 매장
-(2, 2, 2,
+(2, 2,
  120, -2.10, 1.50, 0.85,
  8500000.00, 9000000.00, 8800000.00,
  3, 15, 12.00,
@@ -39,7 +39,7 @@ INSERT INTO s_grade_feature (
  'STABLE', 'STABLE', 4.2, 15, 0.0, 0,
  80.00, 0, 15, 1, 0, NOW()),
 -- user_id=1003: 온라인 중심 신규 매장
-(3, 3, 3,
+(3, 3,
  6, 25.00, 0.00, 0.60,
  5000000.00, 4500000.00, 0.00,
  0, 2, 92.00,

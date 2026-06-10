@@ -20,3 +20,6 @@ scikit-learn==1.6.1
 
 # ── LLM (자연어 조언 생성) ─────────────────────────────────
 google-generativeai==0.8.5
+
+# ── DB (s_grade_feature 읽기 전용) ─────────────────────────
+PyMySQL==1.1.1

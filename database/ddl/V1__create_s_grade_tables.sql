@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS batch_execution_history (
 CREATE TABLE IF NOT EXISTS s_grade_feature (
     feature_id                          BIGINT          NOT NULL AUTO_INCREMENT,
     biz_data_id                         BIGINT          NOT NULL COMMENT '원본 My Biz Data ID',
-    user_id                             BIGINT          NOT NULL COMMENT '사업자 사용자 ID',
 
     -- 계량 변수 (A)
     business_age_months                 INT             NOT NULL COMMENT 'A1: 업력 (개월)',
@@ -73,8 +72,8 @@ CREATE TABLE IF NOT EXISTS s_grade_feature (
     created_at                          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '피처 생성 일시',
 
     PRIMARY KEY (feature_id),
-    INDEX idx_s_input_feature_user_created (user_id, created_at),
-    INDEX idx_s_input_feature_biz_data (biz_data_id)
+    INDEX idx_s_grade_feature_biz_data (biz_data_id),
+    INDEX idx_s_grade_feature_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='My Biz Data → LightGBM 모델 입력용 계량·비계량 변수 가공 결과';
 
