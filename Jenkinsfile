@@ -32,7 +32,7 @@ pipeline {
                         ssh -o StrictHostKeyChecking=no ubuntu@$APP_SERVER '
                             docker pull $REGISTRY/$IMAGE_NAME:$BRANCH_TAG &&
                             docker tag  $REGISTRY/$IMAGE_NAME:$BRANCH_TAG $REGISTRY/$IMAGE_NAME:latest &&
-                            docker-compose -f /home/ubuntu/docker-compose.yml up -d sofit-ai
+                            docker  compose -f /home/ubuntu/docker-compose.yml up -d sofit-ai
                         '
                     """
                 }
