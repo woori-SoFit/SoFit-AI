@@ -193,7 +193,10 @@ async def predict_s_grade(request: SGradePredictRequest) -> SGradePredictRespons
     4. Gemini LLM → user_advice, admin_advice 생성
     5. JSON Response 반환 (DB 쓰기 없음)
     """
+    from asyncio import to_thread
+
     from fastapi import HTTPException, status
+
     from db import fetch_feature_by_biz_data_id
 
     # 모델 로드 확인
@@ -206,8 +209,19 @@ async def predict_s_grade(request: SGradePredictRequest) -> SGradePredictRespons
             ).model_dump(),
         )
 
-    # 1. DB에서 피처 조회
-    row = fetch_feature_by_biz_data_id(request.biz_data_id)
+    # 1. DB에서 피처 조회 (동기 I/O → 스레드풀에서 실행하여 이벤트 루프 블로킹 방지)
+    try:
+        row = await to_thread(fetch_feature_by_biz_data_id, request.biz_data_id)
+    except Exception as e:
+        logger.error("DB 조회 실패: biz_data_id=%d, error=%s", request.biz_data_id, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=SGradePredictErrorResponse(
+                error="DB_CONNECTION_ERROR",
+                message="피처 데이터 조회 중 오류가 발생했습니다.",
+            ).model_dump(),
+        )
+
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
