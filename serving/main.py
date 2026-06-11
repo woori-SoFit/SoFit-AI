@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, status
 
@@ -8,6 +10,12 @@ from app.api.deps import set_explainer, set_predictor
 from app.core.config import settings
 from app.core.constants import SGrade
 from advisor import Advisor
+from db import (
+    fetch_batch_status_summary,
+    fetch_feature_by_biz_data_id,
+    fetch_latest_batch_execution,
+    is_batch_running_in_db,
+)
 from explainer import Explainer
 from predictor import Predictor
 from schemas import (
@@ -111,21 +119,20 @@ async def trigger_monthly_batch(
             )
 
         # 2) DB 상태 체크 (서버 재시작 대응)
-        from asyncio import to_thread
-        from db import is_batch_running_in_db
-
-        db_running = await to_thread(is_batch_running_in_db)
+        db_running = await asyncio.to_thread(is_batch_running_in_db)
         if db_running:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="이미 배치가 실행 중입니다.",
             )
 
-        # 플래그 선점
-        _batch_running = True
-
-    # 백그라운드로 배치 실행
-    asyncio.create_task(_run_batch_background(triggered_by))
+        # 플래그 선점 + task 생성을 함께 보호
+        try:
+            _batch_running = True
+            asyncio.create_task(_run_batch_background(triggered_by))
+        except Exception:
+            _batch_running = False
+            raise
 
     return BatchTriggerResponse(message="배치 실행이 시작되었습니다.")
 
@@ -133,8 +140,6 @@ async def trigger_monthly_batch(
 async def _run_batch_background(triggered_by: int | None) -> None:
     """백그라운드에서 run_monthly_batch를 실행하고, 완료/실패 시 플래그를 해제한다."""
     global _batch_running
-    import sys
-    from pathlib import Path
 
     # batch 모듈 경로 추가
     _project_root = Path(__file__).resolve().parent.parent
@@ -166,16 +171,13 @@ async def get_batch_status() -> BatchStatusResponse:
     가장 최근 배치 실행 상태를 조회한다.
     batch_execution_history + s_grade_history를 조인하여 집계.
     """
-    from asyncio import to_thread
-    from db import fetch_batch_status_summary, fetch_latest_batch_execution
-
-    latest = await to_thread(fetch_latest_batch_execution)
+    latest = await asyncio.to_thread(fetch_latest_batch_execution)
 
     if latest is None:
         return BatchStatusResponse(status="NONE")
 
     # s_grade_history 상태별 집계
-    summary = await to_thread(fetch_batch_status_summary, latest["execution_id"])
+    summary = await asyncio.to_thread(fetch_batch_status_summary, latest["execution_id"])
 
     return BatchStatusResponse(
         status=latest["status"],
@@ -199,7 +201,6 @@ async def predict(
     """
     # 모델 로드 여부 확인 (deps 없이 직접 체크 — 더 명확한 에러 메시지 제공)
     if not predictor.is_loaded:
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="모델이 로드되지 않았습니다. 모델 파일을 서버에 배치한 후 재시작하세요.",
@@ -306,11 +307,6 @@ async def predict_s_grade(request: SGradePredictRequest) -> SGradePredictRespons
     4. Gemini LLM → user_advice, admin_advice 생성
     5. JSON Response 반환 (DB 쓰기 없음)
     """
-    from asyncio import to_thread
-
-    from fastapi import HTTPException, status
-
-    from db import fetch_feature_by_biz_data_id
 
     # 모델 로드 확인
     if not predictor.is_loaded:
@@ -324,7 +320,7 @@ async def predict_s_grade(request: SGradePredictRequest) -> SGradePredictRespons
 
     # 1. DB에서 피처 조회 (동기 I/O → 스레드풀에서 실행하여 이벤트 루프 블로킹 방지)
     try:
-        row = await to_thread(fetch_feature_by_biz_data_id, request.biz_data_id)
+        row = await asyncio.to_thread(fetch_feature_by_biz_data_id, request.biz_data_id)
     except Exception as e:
         logger.error("DB 조회 실패: biz_data_id=%d, error=%s", request.biz_data_id, str(e))
         raise HTTPException(
