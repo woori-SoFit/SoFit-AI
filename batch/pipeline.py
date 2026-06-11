@@ -1,13 +1,21 @@
 """
 S등급 산출 배치 파이프라인.
 
-처리 흐름:
-1. s_calculation_request에서 REQUESTED 상태 조회
-2. 해당 사용자의 s_input_feature 데이터로 LightGBM 모델 추론
+처리 흐름 (월별 배치):
+1. 전체 사용자의 최신 s_grade_feature 데이터 조회 (biz_data_id → my_biz_data.business_number 기준)
+2. 해당 사용자의 s_grade_feature 데이터로 LightGBM 모델 추론
 3. SHAP 기반 XAI 설명 생성
-4. Gemini LLM으로 자연어 조언 생성
-5. 결과를 s_evaluation_history, shap_explanation에 적재
-6. s_calculation_request 상태를 COMPLETED로 갱신
+4. Gemini LLM으로 자연어 조언 생성 (user_advice + admin_advice)
+5. 결과를 s_grade_report에 적재
+6. s_grade_history 상태를 COMPLETED로 갱신 + evaluated_at 기록
+
+[건별 산출]
+- 건별 S등급 산출은 FastAPI 서빙 서버에서 처리 (일일 배치 제거됨)
+
+[재시도 전략]
+- 배치 내부 메모리에서 최대 3회 즉시 재시도
+- 3회 실패 → FAILED 처리
+- 배치 시작 시 CALCULATING 고아 건을 REQUESTED로 1회 복구 (이전 배치 비정상 종료 대응)
 """
 
 import asyncio
@@ -28,27 +36,29 @@ sys.path.insert(0, str(_PROJECT_ROOT / "serving"))
 from app.core.constants import SGrade
 from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N
 from batch.db import (
+    STATUS_CALCULATING,
     STATUS_COMPLETED,
     STATUS_FAILED,
-    STATUS_IN_PROGRESS,
     STATUS_REQUESTED,
-    complete_requests_for_user,
+    complete_grade_history,
+    complete_requested_for_user,
+    fail_grade_history,
     fetch_all_latest_features,
-    fetch_requested_calculations,
     get_connection,
     insert_batch_execution,
-    insert_evaluation_and_update_latest,
-    insert_shap_explanation,
-    recover_orphaned_requests,
-    rollback_request_on_failure,
+    insert_grade_history,
+    insert_grade_report,
+    recover_orphaned_calculating,
     update_batch_execution,
-    update_evaluation_result_id,
-    update_request_status,
+    update_grade_history_status,
 )
 
 logger = logging.getLogger(__name__)
 
-# 모델 입력에 사용되는 피처 컬럼 (s_input_feature 테이블 순서)
+# 최대 재시도 횟수 (배치 내부 메모리에서 관리)
+MAX_RETRY_COUNT: int = 3
+
+# 모델 입력에 사용되는 피처 컬럼 (s_grade_feature 테이블 순서)
 FEATURE_COLUMNS: list[str] = [
     "business_age_months",
     "quarterly_revenue_growth_rate",
@@ -180,7 +190,6 @@ def prepare_features(row: dict[str, Any]) -> pd.DataFrame:
             df[col] = df[col].astype(int)
 
     # categorical 컬럼 타입 변환 (학습 시 category로 지정된 컬럼)
-    # LightGBM predict_proba는 category 타입을 기대함
     categorical_cols = ["commercial_trend", "industry_trend"]
     for col in categorical_cols:
         if col in df.columns:
@@ -218,15 +227,11 @@ def compute_shap(
     Returns:
         (strengths, improvements): 각각 {feature_name, shap_value, feature_value} 리스트
     """
-    # LightGBM 네이티브 SHAP (pred_contrib=True)
-    # 반환 shape: (n_samples, (n_features + 1) * n_classes)
-    # 각 클래스별로 n_features + 1(bias) 값이 연속으로 배치됨
     booster = model.booster_
     n_features = len(FEATURE_COLUMNS)
     n_classes = 10  # S1~S10
 
     contrib = booster.predict(input_df, pred_contrib=True)
-    # shape: (1, (n_features + 1) * n_classes)
     contrib = contrib.reshape(1, n_classes, n_features + 1)
     # target_class의 SHAP 값 추출 (bias 제외)
     combined = contrib[0, target_class, :n_features]
@@ -297,15 +302,15 @@ def extract_details(
     return strength_details, improvement_details
 
 
-async def generate_advice(
+async def generate_user_advice(
     s_grade: str,
     target_grade: str,
     strengths: list[dict[str, Any]],
     improvements: list[dict[str, Any]],
 ) -> str:
-    """Gemini LLM으로 자연어 조언 생성."""
+    """Gemini LLM으로 유저 전용 자연어 조언 생성."""
     if not GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY 미설정 — 조언 생성 건너뜀")
+        logger.warning("GEMINI_API_KEY 미설정 — 유저 조언 생성 건너뜀")
         return ""
 
     import google.generativeai as genai
@@ -321,27 +326,55 @@ async def generate_advice(
 
     # S1인 경우 개선 조언 불필요
     if s_grade == "S1":
-        prompt = _build_s1_prompt(s_grade, top_strengths)
+        prompt = _build_s1_user_prompt(s_grade, top_strengths)
     else:
-        prompt = _build_prompt(s_grade, target_grade, top_strengths, controllable_improvements)
+        prompt = _build_user_prompt(s_grade, target_grade, top_strengths, controllable_improvements)
 
     try:
         response = await model.generate_content_async(prompt)
         advice = response.text.strip()
-        logger.info("조언 생성 완료 (user grade: %s, %d자)", s_grade, len(advice))
+        logger.info("유저 조언 생성 완료 (grade: %s, %d자)", s_grade, len(advice))
         return advice
     except Exception as e:
-        logger.error("Gemini 호출 실패: %s", str(e))
+        logger.error("Gemini 호출 실패 (유저 조언): %s", str(e))
         return ""
 
 
-def _build_prompt(
+async def generate_admin_advice(
     s_grade: str,
     target_grade: str,
     strengths: list[dict[str, Any]],
     improvements: list[dict[str, Any]],
 ) -> str:
-    """일반 등급용 LLM 프롬프트."""
+    """Gemini LLM으로 은행원 전용 분석 텍스트 생성."""
+    if not GEMINI_API_KEY:
+        logger.warning("GEMINI_API_KEY 미설정 — 은행원 조언 생성 건너뜀")
+        return ""
+
+    import google.generativeai as genai
+
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel(GEMINI_MODEL)
+
+    prompt = _build_admin_prompt(s_grade, target_grade, strengths, improvements)
+
+    try:
+        response = await model.generate_content_async(prompt)
+        advice = response.text.strip()
+        logger.info("은행원 조언 생성 완료 (grade: %s, %d자)", s_grade, len(advice))
+        return advice
+    except Exception as e:
+        logger.error("Gemini 호출 실패 (은행원 조언): %s", str(e))
+        return ""
+
+
+def _build_user_prompt(
+    s_grade: str,
+    target_grade: str,
+    strengths: list[dict[str, Any]],
+    improvements: list[dict[str, Any]],
+) -> str:
+    """일반 등급용 유저 LLM 프롬프트."""
     strengths_text = ""
     for feat in strengths:
         kr_name = FEATURE_NAMES_KR.get(feat["feature_name"], feat["feature_name"])
@@ -371,15 +404,15 @@ def _build_prompt(
    • 둘째~셋째 문장: 개선 포인트별 구체적이고 실행 가능한 조언 (각 1문장)
    • 마지막 문장: 종합 격려 (1문장)
 2. 전문 용어 없이 소상공인이 이해할 수 있는 쉬운 말로 작성
-3. 전체 3~5문장, 각 문장은 bullet(•)로 시작
+3. 전체 4문장. 각 문장마다 줄바꿈하여 저장.
 4. 한국어로 작성
 5. '-해요'체로 친근하게 작성
 6. 목표하는 등급을 언급하지 않기
 """
 
 
-def _build_s1_prompt(s_grade: str, strengths: list[dict[str, Any]]) -> str:
-    """S1 등급용 LLM 프롬프트 (개선 조언 없이 강점 유지 조언만)."""
+def _build_s1_user_prompt(s_grade: str, strengths: list[dict[str, Any]]) -> str:
+    """S1 등급용 유저 LLM 프롬프트 (개선 조언 없이 강점 유지 조언만)."""
     strengths_text = ""
     for feat in strengths:
         kr_name = FEATURE_NAMES_KR.get(feat["feature_name"], feat["feature_name"])
@@ -397,181 +430,70 @@ def _build_s1_prompt(s_grade: str, strengths: list[dict[str, Any]]) -> str:
 [작성 규칙]
 1. 최고 등급 달성을 축하하고 현재 강점을 유지하도록 격려
 2. 전문 용어 없이 소상공인이 이해할 수 있는 쉬운 말로 작성
-3. 전체 2~3문장, 각 문장은 bullet(•)로 시작
+3. 전체 4문장. 각 문장마다 줄바꿈하여 저장.
 4. 한국어로 작성
 5. '-해요'체로 친근하게 작성
 """
 
 
-async def process_single_request(
-    model: Any,
-    row: dict[str, Any],
-    batch_execution_id: int,
-    conn: Any,
-) -> None:
-    """단일 산출 요청 처리 (추론 → SHAP → 조언 → DB 적재)."""
-    request_id = row["request_id"]
-    user_id = row["target_user_id"]
-    biz_data_id = row["biz_data_id"]
+def _build_admin_prompt(
+    s_grade: str,
+    target_grade: str,
+    strengths: list[dict[str, Any]],
+    improvements: list[dict[str, Any]],
+) -> str:
+    """은행원 전용 LLM 프롬프트 (심사 참고용 분석 텍스트)."""
+    strengths_text = ""
+    for feat in strengths:
+        kr_name = FEATURE_NAMES_KR.get(feat["feature_name"], feat["feature_name"])
+        strengths_text += f"• {kr_name}: 현재 값 {feat['feature_value']} (SHAP 기여도: {feat['shap_value']:+.6f})\n"
 
-    logger.info("처리 시작: request_id=%d, user_id=%d", request_id, user_id)
+    improvements_text = ""
+    for feat in improvements:
+        kr_name = FEATURE_NAMES_KR.get(feat["feature_name"], feat["feature_name"])
+        improvements_text += f"• {kr_name}: 현재 값 {feat['feature_value']} (SHAP 기여도: {feat['shap_value']:+.6f})\n"
 
-    # 1. 요청 상태 → IN_PROGRESS
-    update_request_status(conn, request_id, STATUS_IN_PROGRESS)
-    conn.commit()
+    return f"""당신은 은행 대출 심사를 보조하는 AI 분석가입니다.
+아래 소상공인의 성장 S등급 산출 근거를 은행원이 심사에 참고할 수 있도록 요약해주세요.
 
-    # 2. 피처 준비 및 모델 추론
-    input_df = prepare_features(row)
-    s_grade, score = predict_grade(model, input_df)
-    target_grade = get_target_grade(s_grade)
+[산출 결과]
+- 성장 등급: {s_grade} (S1 최고 ~ S10 최저)
+- 목표 등급: {target_grade}
 
-    logger.info(
-        "추론 완료: user_id=%d, grade=%s, score=%.4f, target=%s",
-        user_id, s_grade.value, score, target_grade.value,
-    )
+[긍정 기여 요인 (강점)]
+{strengths_text if strengths_text else "• 해당 없음"}
 
-    # 3. SHAP 계산
-    target_class = target_grade.to_index()
-    strengths, improvements = compute_shap(model, input_df, target_class)
+[부정 기여 요인 (약점)]
+{improvements_text if improvements_text else "• 해당 없음"}
 
-    # 4. 키워드 및 상세 추출
-    strength_keywords, improvement_keywords = extract_keywords(strengths, improvements)
-    strength_details, improvement_details = extract_details(strengths, improvements)
-
-    # S1인 경우 개선점 비우기
-    if s_grade == SGrade.S1:
-        improvement_keywords = []
-        improvement_details = {}
-
-    # 5. LLM 조언 생성
-    advice = await generate_advice(
-        s_grade.value, target_grade.value, strengths, improvements
-    )
-
-    # 6. DB 적재 (트랜잭션)
-    # 6-1. s_evaluation_history 삽입 + is_latest 갱신
-    evaluation_id = insert_evaluation_and_update_latest(
-        conn, user_id, biz_data_id, batch_execution_id, s_grade.value, score
-    )
-
-    # 6-2. shap_explanation 삽입
-    result_id = insert_shap_explanation(
-        conn,
-        evaluation_id=evaluation_id,
-        user_id=user_id,
-        s_grade=s_grade.value,
-        target_grade=target_grade.value,
-        strength_keywords=json.dumps(strength_keywords, ensure_ascii=False),
-        improvement_keywords=json.dumps(improvement_keywords, ensure_ascii=False),
-        strength_details=json.dumps(strength_details, ensure_ascii=False),
-        improvement_details=json.dumps(improvement_details, ensure_ascii=False),
-        advice=advice,
-    )
-
-    # 6-3. evaluation에 result_id 연결
-    update_evaluation_result_id(conn, evaluation_id, result_id)
-
-    # 6-4. 요청 상태 → COMPLETED
-    update_request_status(conn, request_id, STATUS_COMPLETED, s_evaluation_id=evaluation_id)
-
-    # 커밋 (건별 커밋으로 부분 실패 시 이미 처리된 건 보존)
-    conn.commit()
-
-    logger.info(
-        "처리 완료: request_id=%d, user_id=%d, grade=%s, evaluation_id=%d",
-        request_id, user_id, s_grade.value, evaluation_id,
-    )
-
-
-async def run_batch() -> None:
-    """일일 배치 메인 실행 함수 (DAILY)."""
-    logger.info("=" * 60)
-    logger.info("S등급 산출 일일 배치 시작 (DAILY)")
-    logger.info("=" * 60)
-
-    # 모델 로드
-    model = load_model()
-
-    with get_connection() as conn:
-        # ── 전략 B: 배치 시작 시 고아 건 복구 ──
-        recover_orphaned_requests(conn)
-        conn.commit()
-
-        # REQUESTED 상태 조회 (retry_count < 3인 건만)
-        requests = fetch_requested_calculations(conn)
-
-        if not requests:
-            logger.info("처리할 요청이 없습니다. 배치 종료.")
-            return
-
-        # 배치 실행 이력 생성
-        batch_execution_id = insert_batch_execution(
-            conn,
-            execution_type="AUTO",
-            execution_cycle="DAILY",
-            total_count=len(requests),
-        )
-        conn.commit()
-        logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(requests))
-
-        success_count = 0
-        fail_count = 0
-        last_error = None
-
-        for row in requests:
-            try:
-                await process_single_request(model, row, batch_execution_id, conn)
-                success_count += 1
-            except Exception as e:
-                fail_count += 1
-                last_error = str(e)
-                logger.error(
-                    "처리 실패: request_id=%d, error=%s",
-                    row["request_id"], str(e),
-                    exc_info=True,
-                )
-                # 실패한 건은 롤백
-                conn.rollback()
-
-                # ── 전략 C: 실패 시 즉시 롤백 (REQUESTED로 되돌리거나 FAILED 처리) ──
-                rollback_request_on_failure(
-                    conn,
-                    request_id=row["request_id"],
-                    error_message=str(e),
-                    current_retry_count=row.get("retry_count", 0),
-                )
-                conn.commit()
-
-        # 배치 실행 이력 업데이트
-        final_status = STATUS_COMPLETED if fail_count == 0 else STATUS_FAILED
-        update_batch_execution(
-            conn, batch_execution_id, final_status, success_count, fail_count, last_error
-        )
-        conn.commit()
-
-        logger.info("-" * 60)
-        logger.info(
-            "일일 배치 완료: 성공=%d, 실패=%d, 상태=%s",
-            success_count, fail_count, final_status,
-        )
-        logger.info("=" * 60)
+[작성 규칙]
+1. 객관적이고 간결한 분석 톤으로 작성 (경어 사용)
+2. 전체 4문장으로 핵심 요약. 각 문장마다 줄바꿈하여 저장. 
+3. 강점과 리스크 요인을 균형 있게 기술
+4. 한국어로 작성
+5. 사업자 성장 가능성에 대한 종합 판단 포함
+"""
 
 
 async def process_single_user(
     model: Any,
     row: dict[str, Any],
+    s_grade_id: int,
     batch_execution_id: int,
     conn: Any,
 ) -> None:
     """
     월별 배치용: 단일 사용자 처리 (추론 → SHAP → 조언 → DB 적재).
-    s_calculation_request를 거치지 않고 s_input_feature에서 직접 처리.
-    처리 완료 시 해당 사용자의 REQUESTED 요청도 함께 소화.
+    s_grade_id는 호출자(run_monthly_batch)가 재시도 루프 바깥에서 생성하여 전달한다.
     """
     user_id = row["user_id"]
-    biz_data_id = row["biz_data_id"]
+    feature_id = row["feature_id"]
 
-    logger.info("월별 처리 시작: user_id=%d", user_id)
+    logger.info("월별 처리 시작: user_id=%d, s_grade_id=%d", user_id, s_grade_id)
+
+    # 상태 → CALCULATING
+    update_grade_history_status(conn, s_grade_id, STATUS_CALCULATING)
+    conn.commit()
 
     # 1. 피처 준비 및 모델 추론
     input_df = prepare_features(row)
@@ -596,36 +518,38 @@ async def process_single_user(
         improvement_keywords = []
         improvement_details = {}
 
-    # 4. LLM 조언 생성
-    advice = await generate_advice(
+    # 4. LLM 조언 생성 (유저용 + 은행원용)
+    user_advice = await generate_user_advice(
+        s_grade.value, target_grade.value, strengths, improvements
+    )
+    admin_advice = await generate_admin_advice(
         s_grade.value, target_grade.value, strengths, improvements
     )
 
-    # 5. DB 적재 (트랜잭션)
-    evaluation_id = insert_evaluation_and_update_latest(
-        conn, user_id, biz_data_id, batch_execution_id, s_grade.value, score
-    )
-
-    result_id = insert_shap_explanation(
+    # 5. DB 적재
+    insert_grade_report(
         conn,
-        evaluation_id=evaluation_id,
+        s_grade_id=s_grade_id,
         user_id=user_id,
+        feature_id=feature_id,
         s_grade=s_grade.value,
         target_grade=target_grade.value,
         strength_keywords=json.dumps(strength_keywords, ensure_ascii=False),
         improvement_keywords=json.dumps(improvement_keywords, ensure_ascii=False),
         strength_details=json.dumps(strength_details, ensure_ascii=False),
         improvement_details=json.dumps(improvement_details, ensure_ascii=False),
-        advice=advice,
+        user_advice=user_advice,
+        admin_advice=admin_advice,
     )
 
-    update_evaluation_result_id(conn, evaluation_id, result_id)
+    # s_grade_history → COMPLETED + evaluated_at
+    complete_grade_history(conn, s_grade_id)
 
-    # 6. 해당 사용자의 REQUESTED 요청이 있으면 함께 COMPLETED 처리
-    completed_requests = complete_requests_for_user(conn, user_id, evaluation_id)
+    # 해당 사용자의 기존 REQUESTED 건도 함께 COMPLETED 처리
+    completed_requests = complete_requested_for_user(conn, user_id)
     if completed_requests > 0:
         logger.info(
-            "user_id=%d의 REQUESTED 요청 %d건 함께 완료 처리",
+            "user_id=%d의 기존 REQUESTED 요청 %d건 함께 완료 처리",
             user_id, completed_requests,
         )
 
@@ -633,23 +557,26 @@ async def process_single_user(
     conn.commit()
 
     logger.info(
-        "월별 처리 완료: user_id=%d, grade=%s, evaluation_id=%d",
-        user_id, s_grade.value, evaluation_id,
+        "월별 처리 완료: user_id=%d, grade=%s, s_grade_id=%d",
+        user_id, s_grade.value, s_grade_id,
     )
 
 
-async def run_monthly_batch() -> None:
+async def run_monthly_batch(
+    execution_type: str = "AUTO",
+    triggered_by: int | None = None,
+) -> None:
     """월별 배치 메인 실행 함수 (MONTHLY). 전체 사용자 등급 갱신."""
     logger.info("=" * 60)
-    logger.info("S등급 산출 월별 배치 시작 (MONTHLY)")
+    logger.info("S등급 산출 월별 배치 시작 (MONTHLY, type=%s)", execution_type)
     logger.info("=" * 60)
 
     # 모델 로드
     model = load_model()
 
     with get_connection() as conn:
-        # ── 전략 B: 배치 시작 시 고아 건 복구 ──
-        recover_orphaned_requests(conn)
+        # 고아 건 복구 (이전 배치 비정상 종료 대응)
+        recover_orphaned_calculating(conn)
         conn.commit()
 
         # 전체 사용자의 최신 피처 조회
@@ -662,9 +589,10 @@ async def run_monthly_batch() -> None:
         # 배치 실행 이력 생성
         batch_execution_id = insert_batch_execution(
             conn,
-            execution_type="AUTO",
+            execution_type=execution_type,
             execution_cycle="MONTHLY",
             total_count=len(all_features),
+            triggered_by=triggered_by,
         )
         conn.commit()
         logger.info("배치 실행 ID: %d, 대상 건수: %d", batch_execution_id, len(all_features))
@@ -674,19 +602,39 @@ async def run_monthly_batch() -> None:
         last_error = None
 
         for row in all_features:
-            try:
-                await process_single_user(model, row, batch_execution_id, conn)
-                success_count += 1
-            except Exception as e:
-                fail_count += 1
-                last_error = str(e)
-                logger.error(
-                    "월별 처리 실패: user_id=%d, error=%s",
-                    row["user_id"], str(e),
-                    exc_info=True,
-                )
-                # 실패한 건은 롤백
-                conn.rollback()
+            user_id = row["user_id"]
+            feature_id = row["feature_id"]
+
+            # s_grade_history 신규 생성 — 재시도 루프 바깥에서 1회만 수행
+            s_grade_id = insert_grade_history(conn, user_id, feature_id, batch_execution_id)
+            conn.commit()
+
+            retry_count = 0
+            success = False
+
+            while retry_count < MAX_RETRY_COUNT and not success:
+                try:
+                    await process_single_user(model, row, s_grade_id, batch_execution_id, conn)
+                    success = True
+                    success_count += 1
+                except Exception as e:
+                    retry_count += 1
+                    conn.rollback()
+                    logger.error(
+                        "월별 처리 실패 (시도 %d/%d): user_id=%d, error=%s",
+                        retry_count, MAX_RETRY_COUNT, user_id, str(e),
+                        exc_info=True,
+                    )
+
+                    if retry_count >= MAX_RETRY_COUNT:
+                        fail_count += 1
+                        last_error = str(e)
+                        fail_grade_history(conn, s_grade_id)
+                        conn.commit()
+                        logger.warning(
+                            "최종 실패: user_id=%d (%d회 재시도 후 FAILED)",
+                            user_id, MAX_RETRY_COUNT,
+                        )
 
         # 배치 실행 이력 업데이트
         final_status = STATUS_COMPLETED if fail_count == 0 else STATUS_FAILED

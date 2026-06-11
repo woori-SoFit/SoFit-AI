@@ -29,6 +29,11 @@ FROM python:3.11-slim AS runtime
 # 보안: root가 아닌 전용 사용자로 실행
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
+# LightGBM 런타임 의존성
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # builder 스테이지의 가상환경 복사

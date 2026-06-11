@@ -80,3 +80,37 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     model_loaded: bool = Field(..., description="모델 로드 여부")
+
+
+# ── 건별 S등급 산출 API (Spring BE → Python) ──────────────────
+
+class SGradePredictRequest(BaseModel):
+    """
+    건별 S등급 산출 요청.
+    Spring BE가 회원가입 시 호출. biz_data_id만 전달하면 Python이 DB에서 피처를 조회.
+    """
+
+    biz_data_id: int = Field(..., description="s_grade_feature 테이블에서 피처를 조회할 key")
+
+
+class SGradePredictResponse(BaseModel):
+    """
+    건별 S등급 산출 응답.
+    Spring BE가 이 응답을 받아서 s_grade_history / s_grade_report에 저장.
+    """
+
+    s_grade: str = Field(..., description="산출된 등급 (S1~S10)")
+    target_grade: str | None = Field(None, description="다음 목표 등급 (S1이면 null)")
+    strength_keywords: list[str] = Field(..., description="강점 키워드 목록 (고객 리포트용)")
+    improvement_keywords: list[str] = Field(..., description="개선 키워드 목록 (고객 리포트용)")
+    strength_details: dict[str, float] = Field(..., description="강점 항목별 SHAP 기여도")
+    improvement_details: dict[str, float] = Field(..., description="개선 항목별 SHAP 기여도 (음수)")
+    user_advice: str = Field(..., description="고객용 자연어 조언 (LLM 생성)")
+    admin_advice: str = Field(..., description="은행원용 상세 분석 (내부 변수 포함 가능)")
+
+
+class SGradePredictErrorResponse(BaseModel):
+    """건별 S등급 산출 에러 응답."""
+
+    error: str = Field(..., description="에러 코드")
+    message: str = Field(..., description="에러 상세 메시지")

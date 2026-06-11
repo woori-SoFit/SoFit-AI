@@ -198,7 +198,7 @@ class Advisor:
         strengths: list[ShapFeature],
         improvements: list[ShapFeature],
     ) -> str:
-        """LLM 프롬프트 구성."""
+        """유저용 LLM 프롬프트 구성."""
 
         strengths_text = ""
         for feat in strengths:
@@ -227,9 +227,82 @@ class Advisor:
             • 둘째~셋째 문장: 개선 포인트별 구체적이고 실행 가능한 조언 (각 1문장)
             • 마지막 문장: 종합 격려 (1문장)
             2. 전문 용어 없이 소상공인이 이해할 수 있는 쉬운 말로 작성
-            3. 전체 3~5문장, 각 문장은 bullet(•)로 시작
+            3. 전체 4문장
             4. 한국어로 작성
             5. '-해요'체로 친근하게 작성
             6. 목표하는 등급을 언급하지 않기 
         """
         return prompt
+
+    async def generate_admin_advice(
+        self,
+        s_grade: str,
+        target_grade: str,
+        strengths: list[ShapFeature],
+        improvements: list[ShapFeature],
+    ) -> str:
+        """
+        은행원 전용 분석 텍스트 생성.
+
+        Args:
+            s_grade: 현재 예측 등급
+            target_grade: 목표 등급
+            strengths: 강점 피처 목록
+            improvements: 개선 포인트 피처 목록
+
+        Returns:
+            은행원 전용 분석 문자열
+        """
+        if not self._is_ready:
+            return "은행원 분석 생성이 불가합니다. (Gemini API 미설정)"
+
+        prompt = self._build_admin_prompt(s_grade, target_grade, strengths, improvements)
+
+        try:
+            response = await self._model.generate_content_async(prompt)
+            advice = response.text.strip()
+            logger.info("은행원 조언 생성 완료 (%d자)", len(advice))
+            return advice
+        except Exception as e:
+            logger.error("Gemini 호출 실패 (은행원 조언): %s", str(e))
+            return f"은행원 분석 생성 중 오류가 발생했습니다: {str(e)}"
+
+    def _build_admin_prompt(
+        self,
+        s_grade: str,
+        target_grade: str,
+        strengths: list[ShapFeature],
+        improvements: list[ShapFeature],
+    ) -> str:
+        """은행원 전용 LLM 프롬프트 구성."""
+
+        strengths_text = ""
+        for feat in strengths[:5]:
+            kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
+            strengths_text += f"• {kr_name}: 현재 값 {feat.feature_value} (SHAP 기여도: {feat.shap_value:+.6f})\n"
+
+        improvements_text = ""
+        for feat in improvements[:5]:
+            kr_name = FEATURE_NAMES_KR.get(feat.feature_name, feat.feature_name)
+            improvements_text += f"• {kr_name}: 현재 값 {feat.feature_value} (SHAP 기여도: {feat.shap_value:+.6f})\n"
+
+        return f"""당신은 은행 대출 심사를 보조하는 AI 분석가입니다.
+아래 소상공인의 성장 S등급 산출 근거를 은행원이 심사에 참고할 수 있도록 요약해주세요.
+
+[산출 결과]
+- 성장 등급: {s_grade} (S1 최고 ~ S10 최저)
+- 목표 등급: {target_grade}
+
+[긍정 기여 요인 (강점)]
+{strengths_text if strengths_text else "• 해당 없음"}
+
+[부정 기여 요인 (약점)]
+{improvements_text if improvements_text else "• 해당 없음"}
+
+[작성 규칙]
+1. 객관적이고 간결한 분석 톤으로 작성 (경어 사용)
+2. 3~5문장으로 핵심 요약
+3. 강점과 리스크 요인을 균형 있게 기술
+4. 한국어로 작성
+5. 사업자 성장 가능성에 대한 종합 판단 포함
+"""
