@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -114,3 +114,26 @@ class SGradePredictErrorResponse(BaseModel):
 
     error: str = Field(..., description="에러 코드")
     message: str = Field(..., description="에러 상세 메시지")
+
+
+# ── 월별 배치 API ─────────────────────────────────────────────
+
+
+class BatchTriggerResponse(BaseModel):
+    """배치 트리거 응답."""
+
+    message: str = Field(..., description="응답 메시지")
+
+
+class BatchStatusResponse(BaseModel):
+    """배치 상태 조회 응답."""
+
+    status: Literal["RUNNING", "COMPLETED", "FAILED", "NONE"] = Field(
+        ..., description="배치 상태"
+    )
+    total: int = Field(default=0, description="배치 대상 총 건수")
+    completed: int = Field(default=0, description="완료 건수")
+    failed: int = Field(default=0, description="실패 건수")
+    calculating: int = Field(default=0, description="산출 진행 중 건수")
+    started_at: str | None = Field(default=None, description="배치 시작 일시")
+    completed_at: str | None = Field(default=None, description="배치 완료 일시")
