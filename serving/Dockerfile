@@ -43,6 +43,9 @@ COPY --from=builder /venv /venv
 # Jenkinsfile에서 빌드 컨텍스트가 레포 루트이므로 serving/ 경로로 지정
 COPY serving/ .
 
+# batch 모듈 복사 (월별 배치 HTTP 트리거에서 사용)
+COPY batch/ /app/batch/
+
 # 모델 파일 마운트 포인트 생성 (실제 .pkl 파일은 .gitignore 대상)
 # 온프레미스 서버에서 docker-compose volumes로 마운트하여 사용
 RUN mkdir -p /app/models

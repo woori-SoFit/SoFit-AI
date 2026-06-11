@@ -142,9 +142,13 @@ async def _run_batch_background(triggered_by: int | None) -> None:
     global _batch_running
 
     # batch 모듈 경로 추가
+    # 로컬: serving/ → 상위 = repo root (batch/ 존재)
+    # Docker: /app (batch/가 /app/batch/로 복사됨)
     _project_root = Path(__file__).resolve().parent.parent
-    if str(_project_root) not in sys.path:
-        sys.path.insert(0, str(_project_root))
+    _app_dir = Path(__file__).resolve().parent
+    for p in (_project_root, _app_dir):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
 
     try:
         from batch.pipeline import run_monthly_batch
