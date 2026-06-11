@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -128,7 +128,9 @@ class BatchTriggerResponse(BaseModel):
 class BatchStatusResponse(BaseModel):
     """배치 상태 조회 응답."""
 
-    status: str = Field(..., description="배치 상태: RUNNING | COMPLETED | FAILED | NONE")
+    status: Literal["RUNNING", "COMPLETED", "FAILED", "NONE"] = Field(
+        ..., description="배치 상태"
+    )
     total: int = Field(default=0, description="배치 대상 총 건수")
     completed: int = Field(default=0, description="완료 건수")
     failed: int = Field(default=0, description="실패 건수")
