@@ -30,8 +30,13 @@ import numpy as np
 import pandas as pd
 
 # serving 모듈 재사용을 위해 경로 추가
+# 로컬: batch/ → parent.parent = repo root, serving 디렉토리 추가
+# Docker: /app/batch/ → parent.parent = /, /app에 serving 소스가 이미 존재
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT / "serving"))
+_serving_path = _PROJECT_ROOT / "serving"
+if _serving_path.exists():
+    sys.path.insert(0, str(_serving_path))
+# Docker 환경에서는 /app이 WORKDIR이므로 별도 추가 불필요 (uvicorn이 /app을 sys.path에 포함)
 
 from app.core.constants import SGrade
 from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N
