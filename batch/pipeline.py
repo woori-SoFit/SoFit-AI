@@ -527,6 +527,8 @@ async def process_single_user(
     user_advice = await generate_user_advice(
         s_grade.value, target_grade.value, strengths, improvements
     )
+    # Gemini API rate limit 방지용 딜레이
+    await asyncio.sleep(1.0)
     admin_advice = await generate_admin_advice(
         s_grade.value, target_grade.value, strengths, improvements
     )
@@ -622,6 +624,8 @@ async def run_monthly_batch(
                     await process_single_user(model, row, s_grade_id, batch_execution_id, conn)
                     success = True
                     success_count += 1
+                    # Gemini API rate limit 방지: 다음 사용자 처리 전 딜레이
+                    await asyncio.sleep(1.0)
                 except Exception as e:
                     retry_count += 1
                     conn.rollback()
