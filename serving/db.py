@@ -34,6 +34,7 @@ def get_connection() -> Generator[pymysql.connections.Connection, None, None]:
         cursorclass=DictCursor,
         connect_timeout=10,
         autocommit=True,
+        init_command="SET time_zone='+09:00'",
     )
     try:
         yield conn
