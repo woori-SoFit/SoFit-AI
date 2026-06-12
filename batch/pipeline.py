@@ -39,7 +39,7 @@ if _serving_path.exists():
 # Docker 환경에서는 /app이 WORKDIR이므로 별도 추가 불필요 (uvicorn이 /app을 sys.path에 포함)
 
 from app.core.constants import SGrade
-from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N
+from batch.config import GEMINI_API_KEY, GEMINI_MODEL, MODEL_PATH, SHAP_TOP_N, GEMINI_API_DELAY_SEC, GEMINI_API_RETRY_DELAY_SEC
 from batch.db import (
     STATUS_CALCULATING,
     STATUS_COMPLETED,
@@ -527,6 +527,8 @@ async def process_single_user(
     user_advice = await generate_user_advice(
         s_grade.value, target_grade.value, strengths, improvements
     )
+    # Gemini API rate limit 방지용 딜레이
+    await asyncio.sleep(GEMINI_API_DELAY_SEC)
     admin_advice = await generate_admin_advice(
         s_grade.value, target_grade.value, strengths, improvements
     )
@@ -622,6 +624,8 @@ async def run_monthly_batch(
                     await process_single_user(model, row, s_grade_id, batch_execution_id, conn)
                     success = True
                     success_count += 1
+                    # Gemini API rate limit 방지: 다음 사용자 처리 전 딜레이
+                    await asyncio.sleep(GEMINI_API_DELAY_SEC)
                 except Exception as e:
                     retry_count += 1
                     conn.rollback()
@@ -630,6 +634,8 @@ async def run_monthly_batch(
                         retry_count, MAX_RETRY_COUNT, user_id, str(e),
                         exc_info=True,
                     )
+                    # 재시도 전 딜레이 (rate limit 회피를 위해 더 긴 대기)
+                    await asyncio.sleep(GEMINI_API_RETRY_DELAY_SEC)
 
                     if retry_count >= MAX_RETRY_COUNT:
                         fail_count += 1
