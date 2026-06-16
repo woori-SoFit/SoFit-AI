@@ -97,7 +97,19 @@ async def log_requests(request: Request, call_next):
         request.url.path,
     )
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.error(
+            "response | trace_id=%s method=%s path=%s error=%s elapsed=%.1fms",
+            trace_id,
+            request.method,
+            request.url.path,
+            str(e),
+            elapsed_ms,
+        )
+        raise
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
