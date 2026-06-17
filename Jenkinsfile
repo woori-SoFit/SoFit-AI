@@ -1,5 +1,6 @@
 pipeline {
     agent any
+    options { disableConcurrentBuilds() }
     environment {
         REGISTRY   = '172.21.33.225:5000'
         APP_SERVER = '172.21.33.249'
@@ -7,6 +8,11 @@ pipeline {
         BRANCH_TAG = 'refactoring'
     }
     stages {
+        stage('Cleanup') {
+            steps {
+                sh 'docker image prune -a -f --filter until=72h || true'
+            }
+        }
         stage('Checkout') {
             steps {
                 checkout scm
@@ -32,7 +38,7 @@ pipeline {
                         ssh -o StrictHostKeyChecking=no ubuntu@$APP_SERVER '
                             docker pull $REGISTRY/$IMAGE_NAME:$BRANCH_TAG &&
                             docker tag  $REGISTRY/$IMAGE_NAME:$BRANCH_TAG $REGISTRY/$IMAGE_NAME:latest &&
-                            docker  compose -f /home/ubuntu/docker-compose.yml up -d sofit-ai
+                            docker compose -f /home/ubuntu/docker-compose.yml up -d sofit-ai
                         '
                     """
                 }
@@ -40,8 +46,7 @@ pipeline {
         }
     }
     post {
-        always  { sh 'docker image prune -a -f --filter until=72h' }
-        success { echo "refactoring 브랜치 빌드/배포 성공" }
-        failure { echo "refactoring 브랜치 빌드/배포 실패" }
+        success { echo '빌드/배포 성공' }
+        failure { echo '빌드/배포 실패' }
     }
 }
