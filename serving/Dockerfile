@@ -29,6 +29,15 @@ FROM python:3.11-slim AS runtime
 # 보안: root가 아닌 전용 사용자로 실행
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
+# LightGBM 런타임 의존성
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 타임존을 Asia/Seoul로 설정
+ENV TZ=Asia/Seoul
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 WORKDIR /app
 
 # builder 스테이지의 가상환경 복사
@@ -37,6 +46,9 @@ COPY --from=builder /venv /venv
 # 애플리케이션 소스 복사
 # Jenkinsfile에서 빌드 컨텍스트가 레포 루트이므로 serving/ 경로로 지정
 COPY serving/ .
+
+# batch 모듈 복사 (월별 배치 HTTP 트리거에서 사용)
+COPY batch/ /app/batch/
 
 # 모델 파일 마운트 포인트 생성 (실제 .pkl 파일은 .gitignore 대상)
 # 온프레미스 서버에서 docker-compose volumes로 마운트하여 사용

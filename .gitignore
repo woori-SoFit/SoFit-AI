@@ -3,8 +3,16 @@ models/*.pkl
 models/*.txt
 data/*.csv
 data/*.zip
+data/*.json
 
 # Python 관련 제외
 __pycache__/
 venv/
+.venv/
+*.pyc
 .ipynb_checkpoints/
+
+# 메타데이터 관련 제외
+.DS_Store
+
+.env
