@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
 
 from app.api.deps import set_explainer, set_predictor
 from app.core.config import settings
@@ -78,6 +79,49 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    모든 HTTP 요청/응답을 로깅하는 미들웨어.
+    Spring BE에서 전달된 X-Trace-Id 헤더를 추출하여 로그에 포함.
+    """
+    trace_id = request.headers.get("X-Trace-Id", "-")
+    start = time.perf_counter()
+
+    logger.info(
+        "request  | trace_id=%s method=%s path=%s",
+        trace_id,
+        request.method,
+        request.url.path,
+    )
+
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.error(
+            "response | trace_id=%s method=%s path=%s error=%s elapsed=%.1fms",
+            trace_id,
+            request.method,
+            request.url.path,
+            str(e),
+            elapsed_ms,
+        )
+        raise
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "response | trace_id=%s method=%s path=%s status=%d elapsed=%.1fms",
+        trace_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+
+    return response
 
 # ── 배치 실행 중 관리 (인메모리 플래그 + Lock) ──────────────────
 _batch_running: bool = False
