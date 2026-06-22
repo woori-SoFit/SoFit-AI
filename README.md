@@ -5,8 +5,8 @@
 FastAPI 위에서 LightGBM 모델을 서빙하며, Spring BE(건별 산출)와 월별 배치(전체 회원 갱신) 두 가지 경로로 호출됩니다.
 
 
-<img width="420" alt="우리FISA 6기 - SOFIT 최종발표" src="https://github.com/user-attachments/assets/dbf557f1-ef31-46c8-8eff-f0cbdd4723c9" />
-<img width="420" alt="우리FISA 6기 - SOFIT 최종발표 (1)" src="https://github.com/user-attachments/assets/553f5af6-9428-4daf-bc27-d2e78a2ce2c4" />
+<img width="350" alt="우리FISA 6기 - SOFIT 최종발표" src="https://github.com/user-attachments/assets/dbf557f1-ef31-46c8-8eff-f0cbdd4723c9" />
+<img width="350" alt="우리FISA 6기 - SOFIT 최종발표 (1)" src="https://github.com/user-attachments/assets/553f5af6-9428-4daf-bc27-d2e78a2ce2c4" />
 
 > **등급 방향 주의**: `S1`이 가장 높고 `S10`이 가장 낮은 등급입니다. CB 점수와 결합한 **SCB 점수**와는 별개의 지표이므로 혼용하지 않습니다.
 
