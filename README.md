@@ -1,8 +1,10 @@
 # SoFit-AI
 
-소상공인 대출 플랫폼 **SoFit**의 AI 모노레포입니다. 
-소상공인 **성장 S등급(S1~S10)** 추론과 **SHAP 기반 XAI 설명**, 그리고 **Gemini LLM 자연어 조언**을 생성합니다.
-FastAPI 위에서 LightGBM 모델을 서빙하며, Spring BE(건별 산출)와 월별 배치(전체 회원 갱신) 두 가지 경로로 호출됩니다.
+> [SoFit](https://github.com/woori-SoFit/SoFit) (우리FIS 아카데미 6기 최종 프로젝트 🥇1등 수상작)의 AI 서버입니다.
+
+소상공인 대출 플랫폼 **SoFit**의 AI 서버 레포입니다.
+소상공인 **성장 S등급(S1~S10)** 추론, **SHAP 기반 XAI 설명**, **LLM 자연어 조언**을 생성합니다.
+FastAPI 위에서 LightGBM 모델을 서빙하며, Spring BE(건별 산출)와 월별 배치(전체 회원 갱신) 두 경로로 호출됩니다.
 
 
 <img width="350" alt="우리FISA 6기 - SOFIT 최종발표" src="https://github.com/user-attachments/assets/dbf557f1-ef31-46c8-8eff-f0cbdd4723c9" />
